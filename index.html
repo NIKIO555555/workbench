@@ -1478,7 +1478,8 @@ function pickVoice(lang){
 function speak(text,lang){
   lang=lang||'zh-CN';
   if(!text)return;
-  if(!('speechSynthesis' in window)){toast('当前浏览器不支持语音朗读，请用系统 Chrome / Safari 打开');return;}
+  onlineSpeakStop();
+  if(!('speechSynthesis' in window)){onlineSpeak(text,lang).then(ok=>{if(!ok)toast('当前浏览器不支持语音朗读');});return;}
   try{
     const synth=window.speechSynthesis;
     const u=new SpeechSynthesisUtterance(text);
@@ -1491,12 +1492,13 @@ function speak(text,lang){
       // 有音色列表但无该语言音色 → 拦截，绝不用中文音色读日语/英语
       const vs=VOICES.length?VOICES:('speechSynthesis'in window?window.speechSynthesis.getVoices():[]);
       if(vs.length&&lang!=='zh-CN'){
-        toast('未安装「'+lang+'」语音包：请到 系统/浏览器设置 安装对应语言 TTS（如微软日语 Misaki/英文 Aria），或在 设置→音色实验室 选择可用音色');
+        // 系统装了 TTS 但缺该语言音色 → 在线发音兜底（中英可用）
+        onlineSpeak(text,lang).then(ok=>{if(!ok)toast('未安装「'+lang+'」语音包，且在线发音失败，请到 设置→音色实验室 安装');});
         return;
       }
-      if(!window.__noVoiceWarned){window.__noVoiceWarned=true;toast('语音列表加载中，已用系统默认音朗读');}
+      if(!window.__noVoiceWarned){window.__noVoiceWarned=true;}
     }
-    u.onerror=(e)=>{const c=e&&e.error;if(c==='interrupted'||c==='canceled')return;toast('朗读失败，请重试');};
+    u.onerror=(e)=>{const c=e&&e.error;if(c==='interrupted'||c==='canceled')return;onlineSpeak(text,lang).then(ok=>{if(!ok)toast('朗读失败，请重试');});};
     // 关键：持有 utterance 引用，防止部分浏览器 GC 导致无声
     window.__curUtter=u;
     const IS_IOS=/iPad|iPhone|iPod/.test(navigator.userAgent)&&!window.MSStream;
@@ -1508,17 +1510,25 @@ function speak(text,lang){
       setTimeout(doSpeak,80);
       setTimeout(()=>{try{if(!synth.speaking&&!synth.pending){synth.resume();synth.speak(u);}}catch(e){}},350);
     }
-  }catch(e){toast('朗读失败，请重试');}
+    // 兜底看门狗：1.2 秒后系统 TTS 仍未启动（典型场景：国产 ROM 无 TTS 引擎）→ 切在线发音
+    setTimeout(()=>{
+      try{
+        if(!synth.speaking&&!synth.pending){
+          try{synth.cancel();}catch(e){}
+          onlineSpeak(text,lang).then(ok=>{if(!ok&&window.__curUtter===u)toast('朗读失败：系统 TTS 不可用，在线发音也失败');});
+        }
+      }catch(e){}
+    },1200);
+  }catch(e){onlineSpeak(text,lang).then(ok=>{if(!ok)toast('朗读失败，请重试');});}
 }
 function speakCN(text){speak(text,'zh-CN');}
 /* 长文本分段朗读（Android Chrome 单条 utterance 超长会静默失败，必须分段队列） */
 let __speakQueue=[],__speakStop=false,__speakOnEnd=null;
-function stopSpeak(){try{__speakStop=true;__speakQueue=[];window.speechSynthesis.cancel();}catch(e){}__speakOnEnd=null;}
+function stopSpeak(){try{__speakStop=true;__speakQueue=[];window.speechSynthesis.cancel();}catch(e){}onlineSpeakStop();__speakOnEnd=null;}
 function speakLong(text,lang){
   lang=lang||'zh-CN';
   if(!text)return;
   toast('🔊 开始朗读…');
-  if(!('speechSynthesis' in window)){toast('当前浏览器不支持语音朗读，请用系统 Chrome / Safari 打开');return;}
   stopSpeak();__speakStop=false;
   /* 语言校验：无该语言音色时拦截，避免用中文音色读外语 */
   if(lang!=='zh-CN'){
@@ -1531,6 +1541,21 @@ function speakLong(text,lang){
   parts.forEach(p=>{while(p.length>170){chunks.push(p.slice(0,170));p=p.slice(170);}if(p)chunks.push(p);});
   if(!chunks.length)return;
   __speakQueue=chunks;
+  /* 无任何系统音色（国产 ROM 无 TTS 引擎）→ 全程走在线发音（中/英） */
+  const hasSysVoice=(VOICES.length?VOICES:('speechSynthesis'in window?window.speechSynthesis.getVoices():[])).length>0;
+  if(!hasSysVoice){
+    let oi=0,oFail=0;
+    const oNext=()=>{
+      if(__speakStop)return;
+      if(oi>=__speakQueue.length){if(typeof __speakOnEnd==='function'){const cb=__speakOnEnd;__speakOnEnd=null;cb();}return;}
+      const seg=__speakQueue[oi++];
+      onlineSpeak(seg,lang).then(ok=>{
+        if(!ok){oFail++;if(oFail>=2){toast('在线语音不可用（网络问题）');__speakStop=true;return;}}
+        setTimeout(oNext,150);
+      });
+    };
+    oNext();return;
+  }
   let idx=0;
   const next=()=>{
     if(__speakStop)return;if(idx>=__speakQueue.length){if(typeof __speakOnEnd==='function'){const cb=__speakOnEnd;__speakOnEnd=null;cb();}return;}
@@ -1568,6 +1593,28 @@ function ensureAudioCtx(){
   if(!window.__wbActx||window.__wbActx.state==='closed'){try{window.__wbActx=new Ctx();}catch(e){return null;}}
   if(window.__wbActx.state==='suspended'){try{window.__wbActx.resume().catch(function(){});}catch(e){}}
   return window.__wbActx;
+}
+/* ===== 在线语音兜底（有道词典发音接口：无需 Key、不依赖系统 TTS，支持中/英） =====
+   场景：国产安卓 ROM 未装/未启用 TTS 引擎 → speechSynthesis 有接口但无声（getVoices()=0）。
+   用法：系统 TTS 1.2 秒内没启动或报错时，自动切在线发音；朗读中英文单词/句子均可用。 */
+let __onlineAudio=null;
+function onlineSpeakStop(){try{if(__onlineAudio){__onlineAudio.pause();try{__onlineAudio.src='';}catch(e){}__onlineAudio=null;}}catch(e){}}
+function onlineSpeak(text,lang){
+  return new Promise(function(resolve){
+    try{
+      onlineSpeakStop();
+      const t=String(text).replace(/\s+/g,' ').trim().slice(0,480);
+      if(!t){resolve(false);return;}
+      const isEn=/^en/i.test(lang||'');
+      const a=new Audio('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(t)+'&type='+(isEn?1:2));
+      __onlineAudio=a;
+      let done=false;const fin=ok=>{if(done)return;done=true;if(__onlineAudio===a)__onlineAudio=null;resolve(ok);};
+      a.onended=()=>fin(true);
+      a.onerror=()=>fin(false);
+      a.play().then(()=>{},()=>fin(false));
+      setTimeout(()=>{if(!done&&!a.ended){/* 交给 onerror/ended，仅防悬挂 */}},8000);
+    }catch(e){resolve(false);}
+  });
 }
 async function translateWord(word,langpair){
   langpair=langpair||'en|zh-CN';
@@ -1648,13 +1695,15 @@ function openAudioDiag(){
   html+=adRow('用户已交互',(navigator.userActivation&&navigator.userActivation.hasBeenActive)?'✅ 是':'⚠️ 尚未点击过');
   html+=adRow('朗读引擎',('speechSynthesis' in window)?'✅ 支持':'❌ 不支持');
   const vs=('speechSynthesis' in window)?(VOICES.length?VOICES:window.speechSynthesis.getVoices()):[];
-  html+=adRow('系统音色数',vs.length?('✅ '+vs.length+' 个'):'⚠️ 0 个（异步加载/未安装 TTS）');
+  html+=adRow('系统音色数',vs.length?('✅ '+vs.length+' 个'):'❌ 0 个 → 系统未装/未启用 TTS 引擎');
   html+=adRow('语音朗读测试','⬇️ 点下方按钮开始','adTTSRow');
+  html+=adRow('在线语音测试','⬇️ 点下方按钮开始','adOnlineRow');
   html+=adRow('提示音测试','⬇️ 点下方按钮开始','adBeepRow');
   html+='</div>';
-  html+='<button class="btn primary" id="adTTS" style="width:100%;margin-top:10px;">🗣️ 测试语音朗读（应听到说话）</button>';
+  html+='<button class="btn primary" id="adTTS" style="width:100%;margin-top:10px;">🗣️ 测试语音朗读（系统TTS）</button>';
+  html+='<button class="btn primary" id="adOnline" style="width:100%;margin-top:8px;">🌐 测试在线语音（不依赖系统TTS）</button>';
   html+='<button class="btn" id="adBeep" style="width:100%;margin-top:8px;">🎵 测试提示音（应听到三声哔）</button>';
-  html+='<div class="card-sub" style="margin-top:10px;">📋 结果解读：<br>·「朗读已开始」但没听到 → 手机媒体音量为0或静音模式；<br>·「朗读引擎报错」→ 系统 TTS 缺失（去 设置→音色实验室 安装）；<br>· 微信/QQ 内打开 → 长按链接选「在浏览器打开」；<br>·「音频被暂停」→ 先点一下页面空白处再测。</div>';
+  html+='<div class="card-sub" style="margin-top:10px;">📋 结果解读：<br>·「系统音色数 0 个」= 手机没装/没启用 TTS 引擎（国产安卓常见）→ 打开 手机设置 → 系统（或更多设置）→ 语言和输入法 → <b>文字转语音(TTS)输出</b> → 选择并启用引擎（如"Google 文字转语音/讯飞/本机语音引擎"），启用后重进本页；<br>· 系统TTS 测不了但「在线语音」✅ → 日常朗读会自动走在线发音，无需装引擎；<br>·「朗读已开始」但没听到 → 手机媒体音量为0或静音模式；<br>· 微信/QQ 内打开 → 长按链接选「在浏览器打开」。</div>';
   openSheet('🔊 声音自检',html);
   const ttsBtn=$('#adTTS');
   if(ttsBtn)ttsBtn.onclick=()=>{
@@ -1674,6 +1723,14 @@ function openAudioDiag(){
     try{window.speechSynthesis.resume();}catch(e){}
     setTimeout(()=>{try{window.speechSynthesis.resume();window.speechSynthesis.speak(u);}catch(e){adSet('adTTSRow','❌ 朗读调用失败');}},60);
     setTimeout(()=>{if(!started){try{window.speechSynthesis.resume();}catch(e){}adSet('adTTSRow',started?'':'⚠️ 2秒未开始（引擎卡死/静音，先点一下页面再试）');}},2000);
+  };
+  const adOnline=$('#adOnline');
+  if(adOnline)adOnline.onclick=()=>{
+    adSet('adOnlineRow','⏳ 正在请求在线语音…');
+    onlineSpeak('你好，这是在线语音测试。Hello, this is an online voice test.','zh-CN').then(ok=>{
+      if(ok)adSet('adOnlineRow','✅ 在线语音正常（日常朗读已自动兜底）');
+      else adSet('adOnlineRow','❌ 在线语音失败（网络不通或接口被拦）');
+    });
   };
   const beepBtn=$('#adBeep');
   if(beepBtn)beepBtn.onclick=()=>{
