@@ -1611,16 +1611,27 @@ function onlineSpeak(text,lang){
   return new Promise(function(resolve){
     try{
       onlineSpeakStop();
-      const t=String(text).replace(/\s+/g,' ').trim().slice(0,480);
+      const t=String(text).replace(/\s+/g,' ').trim().slice(0,200);
       if(!t){resolve(false);return;}
-      const isEn=/^en/i.test(lang||'');
-      const a=new Audio('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(t)+'&type='+(isEn?1:2));
-      __onlineAudio=a;
-      let done=false;const fin=ok=>{if(done)return;done=true;if(__onlineAudio===a)__onlineAudio=null;resolve(ok);};
-      a.onended=()=>fin(true);
-      a.onerror=()=>fin(false);
-      a.play().then(()=>{},()=>fin(false));
-      setTimeout(()=>{if(!done&&!a.ended){/* 交给 onerror/ended，仅防悬挂 */}},8000);
+      const l2=(lang||'zh-CN').slice(0,2).toLowerCase();
+      const isZh=l2==='zh',isEn=l2==='en';
+      /* 双通道：百度 gettts 支持整句（仅中/英）；有道 dictvoice 仅支持单个单词，作兜底 */
+      const urls=[];
+      if(isZh||isEn)urls.push('https://fanyi.baidu.com/gettts?lan='+(isZh?'zh':'en')+'&text='+encodeURIComponent(t)+'&spd=5&source=web');
+      urls.push('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(t)+'&type='+(isEn?1:2));
+      let i=0;
+      const tryNext=()=>{
+        if(i>=urls.length){resolve(false);return;}
+        const a=new Audio(urls[i++]);
+        __onlineAudio=a;
+        let done=false;
+        const fin=ok=>{if(done)return;done=true;if(__onlineAudio===a)__onlineAudio=null;resolve(ok);};
+        const fail=()=>{if(done)return;done=true;if(__onlineAudio===a)__onlineAudio=null;tryNext();};
+        a.onended=()=>fin(true);
+        a.onerror=fail;
+        a.play().then(()=>{},fail);
+      };
+      tryNext();
     }catch(e){resolve(false);}
   });
 }
