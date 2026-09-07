@@ -13707,6 +13707,15 @@ function navigate(leaf){
   render=function(){if(!busy)ind.classList.remove('show');__oldRender.apply(null,arguments);};
 })();
 init();
+/* 专用直达链接：?diag=audio 或 #audiotest 自动弹出声音自检 */
+(function(){
+  try{
+    var p=new URLSearchParams(location.search);
+    if(p.get('diag')==='audio'||location.hash==='#audiotest'){
+      setTimeout(function(){try{openAudioDiag();}catch(e){}},400);
+    }
+  }catch(e){}
+})();
 </script>
 </body>
 </html>
