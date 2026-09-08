@@ -1561,10 +1561,27 @@ function speakLong(text,lang){
       if(__speakStop)return;
       if(oi>=__speakQueue.length){if(typeof __speakOnEnd==='function'){const cb=__speakOnEnd;__speakOnEnd=null;cb();}return;}
       const seg=__speakQueue[oi++];
-      onlineSpeak(seg,lang).then(ok=>{
-        if(!ok){oFail++;if(oFail>=2){toast('在线语音不可用（网络问题）');__speakStop=true;return;}}
-        setTimeout(oNext,150);
-      });
+      let tried=0,settled=false;
+      const tick=()=>{
+        if(__speakStop||settled)return;
+        onlineSpeak(seg,lang).then(ok=>{
+          if(settled)return;settled=true;
+          if(!ok){
+            tried++;
+            /* 同段重试一次抗网络抖动；再失败才计错（连续 2 段失败才整体放弃） */
+            if(tried<2){setTimeout(tick,350);return;}
+            oFail++;if(oFail>=2){toast('在线语音连接不畅，已停止朗读');__speakStop=true;return;}
+          }
+          setTimeout(oNext,120);
+        });
+        /* 段看门狗：15s 未完成（加载黑洞 / ended 事件丢失）→ 重试或强制推进，杜绝整篇卡死无声 */
+        setTimeout(()=>{
+          if(__speakStop||settled)return;settled=true;
+          if(tried<1){setTimeout(tick,200);}
+          else{setTimeout(oNext,120);}
+        },15000);
+      };
+      tick();
     };
     oNext();return;
   }
@@ -1622,9 +1639,12 @@ function onlineSpeak(text,lang){
       /* 双通道：百度 gettts 支持整句（仅中/英）；有道 dictvoice 仅支持单个单词，作兜底 */
       const urls=[];
       if(isZh||isEn)urls.push('https://fanyi.baidu.com/gettts?lan='+(isZh?'zh':'en')+'&text='+encodeURIComponent(t)+'&spd=5&source=web');
-      urls.push('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(t)+'&type='+(isEn?1:2));
-      let i=0;
+      /* 有道 dictvoice 只对“单个单词（无空格）”可靠，句子/短语一律 500 → 仅单词场景追加做双保险，句子不再白耗一次失败 */
+      if(!(isZh||isEn)||!/\s/.test(t))urls.push('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(t)+'&type='+(isEn?1:2));
+      let i=0,loadT=null,playT=null;
+      const clearT=()=>{if(loadT){clearTimeout(loadT);loadT=null;}if(playT){clearTimeout(playT);playT=null;}};
       const tryNext=()=>{
+        clearT();
         if(i>=urls.length){resolve(false);return;}
         const a=new Audio(urls[i++]);
         __onlineAudio=a;
@@ -1632,13 +1652,17 @@ function onlineSpeak(text,lang){
         const markStarted=()=>{started=true;};
         a.addEventListener('playing',markStarted);
         a.addEventListener('timeupdate',markStarted);
-        const fin=ok=>{if(done)return;done=true;if(__onlineAudio===a)__onlineAudio=null;resolve(ok);};
+        const fin=ok=>{if(done)return;done=true;clearT();if(__onlineAudio===a)__onlineAudio=null;resolve(ok);};
         /* 切换备用通道的前提：音频从未真正出声（加载/解码失败）→ 试下一通道。
            一旦开始播放（started）后中途断掉 → 直接失败结束，绝不重播，防「说一半再从头一遍」 */
-        const notStartedFail=()=>{if(done)return;done=true;if(__onlineAudio===a)__onlineAudio=null;tryNext();};
+        const notStartedFail=()=>{if(done)return;done=true;clearT();if(__onlineAudio===a)__onlineAudio=null;tryNext();};
         a.onended=()=>fin(true);
         a.onerror=()=>{if(started)fin(false);else notStartedFail();};
         a.play().then(()=>{},()=>{if(!started)notStartedFail();else fin(false);});
+        /* 看门狗①：play 后 12s 仍未开始出声且无错误（网络黑洞）→ 判加载失败换通道 */
+        loadT=setTimeout(()=>{if(!done&&!started)notStartedFail();},12000);
+        /* 看门狗②：已开始播放后 30s 仍未触发 ended（移动端事件丢失）→ 视为本段播完 */
+        playT=setTimeout(()=>{if(!done&&started)fin(true);},30000);
       };
       tryNext();
     }catch(e){resolve(false);}
