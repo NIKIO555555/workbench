@@ -4945,7 +4945,7 @@ function exportData(){
   toast('已开始导出');
 }
 /* ===== 数据守护：升级数据完好确认 + 大备份（含 IndexedDB 媒体） ===== */
-const WB_BUILD='2026-09-19.4';
+const WB_BUILD='2026-09-19.5';
 function wbKeyCount(){let n=0;for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith('wb_'))n++;}return n;}
 function dataGuard(){
   try{
@@ -13558,7 +13558,7 @@ function ensureGalleryDom(){
    +'<div class="pg-top"><button class="pg-bk" id="pgBk">‹</button><div class="pg-tt" id="pgTt">图库</div><div class="pg-ops"><button id="pgAll" style="display:none;">全选</button><button id="pgSel">选择</button><button id="pgCam">📷</button></div></div>'
    +'<div class="pg-gridwrap" id="pgWrap"><div id="pgScroll"></div></div>'
    +'<div class="pg-bottom"><div class="pg-tabs">'
-   +'<span class="pg-tab active" data-gtab="all">全部</span><span class="pg-tab" data-gtab="image">照片</span><span class="pg-tab" data-gtab="video">视频</span>'
+   +'<span class="pg-tab active" data-gtab="all">全部</span><span class="pg-tab" data-gtab="image">照片</span><span class="pg-tab" data-gtab="video">视频</span><span class="pg-tab" data-gtab="trash">回收站</span>'
    +'</div><div class="pg-hint">双指捏合缩放网格（'+ '3~9列' +'）· 点图查看 · 长按多选</div></div></div>'
    +'<div id="pv" class="pv">'
    +'<div class="pg-top"><button class="pg-bk" id="pvBk">‹</button><div class="pg-tt" id="pvTt"></div><div class="pg-ops"><button id="pvPtu">✨ P图</button><button id="pvDel">🗑</button></div></div>'
@@ -13582,14 +13582,77 @@ function openGallery(scope){
   renderGallery();
 }
 function closeGallery(){$('#pgal').classList.remove('open');document.body.style.overflow='';}
-function galFiltered(){return GAL.items.filter(x=>GAL.filter==='all'||x.type===GAL.filter);}
+/* ===== 图库回收站：删除先进回收站，30 天后自动清理 ===== */
+function trashMedia(items){
+  const t=(getGlobal('trash')||[]).slice();
+  const now=Date.now();
+  items.forEach(it=>{if(it&&it.src)t.push({src:it.src,type:it.type||'image',note:it.note||'',module:it.module||'',date:it.date||todayStr(),delTime:now});});
+  setGlobal('trash',t);
+}
+function purgeTrash(days){
+  days=days||30;
+  const t=getGlobal('trash')||[];
+  const keep=t.filter(x=>Date.now()-(x.delTime||0)<days*86400000);
+  if(keep.length!==t.length)setGlobal('trash',keep);
+}
+function restoreTrashItem(idx){
+  const t=(getGlobal('trash')||[]).slice();
+  const it=t[idx];if(!it)return;
+  if(it.module==='photo'){
+    const r=getRec('photo',it.date)||{items:[]};
+    r.items=r.items||[];r.items.push({src:it.src,type:it.type,note:it.note||''});
+    setRec('photo',it.date,r);
+  }else if(it.module==='pet'){
+    const r=getRec('pet',it.date)||{logs:[]};
+    r.logs=r.logs||[];
+    if(r.logs.length&&r.logs[0].media){r.logs[0].media.push({src:it.src,type:it.type});}
+    else r.logs.push({title:'恢复的照片',media:[{src:it.src,type:it.type}],ts:Date.now()});
+    setRec('pet',it.date,r);
+  }else if(it.module==='profile'){
+    const p=getProfile();p.img=it.src;setGlobal('profile',p);
+  }
+  t.splice(idx,1);setGlobal('trash',t);
+}
+function trashPurgeOne(idx){const t=(getGlobal('trash')||[]).slice();t.splice(idx,1);setGlobal('trash',t);}
+function openTrashSheet(it){
+  const preview=it.type==='video'
+    ?'<video src="'+it.src+'" controls playsinline style="width:100%;max-height:50vh;border-radius:12px;background:#000;"></video>'
+    :'<img src="'+it.src+'" style="width:100%;max-height:50vh;object-fit:contain;border-radius:12px;background:var(--input);">';
+  const srcName=it.module==='pet'?'毛球日记':(it.module==='photo'?'拍照记录':(it.module==='profile'?'头像':'记录'));
+  openSheet('回收站','<div style="text-align:center;margin-bottom:10px;">'+preview+'</div>'
+    +'<div class="fv" style="text-align:center;margin-bottom:10px;">来源：'+srcName+' · '+fmtLong(it.date||todayStr())+'</div>'
+    +'<button class="btn primary" id="trRes" style="width:100%;margin-bottom:8px;">♻️ 恢复到原位置</button>'
+    +'<button class="btn" id="trDel" style="width:100%;color:var(--red);">🗑 彻底删除（不可恢复）</button>');
+  $('#trRes').onclick=()=>{restoreTrashItem(it._ti);GAL.items=collectAllMedia(GAL.scope);closeSheet();renderGallery();toast('已恢复到'+srcName+' ✅');};
+  $('#trDel').onclick=()=>{if(!confirm('彻底删除？此操作不可恢复！'))return;trashPurgeOne(it._ti);closeSheet();renderGallery();toast('已彻底删除');};
+}
+function galFiltered(){
+  if(GAL.filter==='trash'){
+    const t=getGlobal('trash')||[];
+    return t.map((x,i)=>({src:x.src,type:x.type||'image',date:x.delTime?new Date(x.delTime).toISOString().slice(0,10):'回收站',note:x.note||'',module:x.module||'',_ti:i}));
+  }
+  return GAL.items.filter(x=>GAL.filter==='all'||x.type===GAL.filter);
+}
 function renderGallery(){
   const items=galFiltered();GAL.filtered=items;
+  const trash=GAL.filter==='trash';
+  if(trash)GAL.selMode=false;
   const scopeName=GAL.scope==='all'?'全部图库':(GAL.scope==='pet'?'毛球图库':(GAL.scope==='photo'?'拍照图库':'图库'));
-  $('#pgTt').textContent=scopeName+' · '+items.length+'项';
+  $('#pgTt').textContent=scopeName+(trash?' · 回收站':'')+' · '+items.length+'项';
+  const ps=$('#pgSel'),pc=$('#pgCam');
+  if(ps)ps.style.display=trash?'none':'';
+  if(pc)pc.style.display=trash?'none':'';
   $('#pgSel').textContent=GAL.selMode?('已选'+GAL.selIdx.size+' · 完成'):'选择';
   const pa=$('#pgAll');
-  if(pa){pa.style.display=GAL.selMode?'':'none';pa.textContent=(GAL.selIdx.size>=GAL.filtered.length&&GAL.filtered.length)?'取消全选':'全选';}
+  if(pa){pa.style.display=(GAL.selMode&&!trash)?'':'none';pa.textContent=(GAL.selIdx.size>=GAL.filtered.length&&GAL.filtered.length)?'取消全选':'全选';}
+  const hint=$('#pgal .pg-hint');
+  if(hint){
+    if(trash){
+      hint.innerHTML='<span id="pgEmptyTrash" style="cursor:pointer;color:#ff8a80;font-weight:700;">🗑 清空回收站</span> · 删除的内容保留 30 天，点图可恢复';
+      const et=$('#pgEmptyTrash');
+      if(et)et.onclick=()=>{const n=(getGlobal('trash')||[]).length;if(!n)return;if(!confirm('清空回收站？将彻底删除全部 '+n+' 项，不可恢复！'))return;setGlobal('trash',[]);renderGallery();toast('回收站已清空');};
+    }else hint.textContent='双指捏合缩放网格（3~9列）· 点图查看 · 长按多选';
+  }
   const groups={};items.forEach((it,i)=>{const d=it.date||'未知';(groups[d]=groups[d]||[]).push({it,i});});
   let h='';
   Object.keys(groups).sort().reverse().forEach(d=>{
@@ -13605,15 +13668,16 @@ function renderGallery(){
     });
     h+='</div>';
   });
-  if(!items.length)h='<div class="pg-empty">暂无照片/视频<br>用「📷 拍摄」或「🖼 上传」添加吧</div>';
+  if(!items.length)h='<div class="pg-empty">'+(trash?'回收站是空的':'暂无照片/视频<br>用「📷 拍摄」或「🖼 上传」添加吧')+'</div>';
   $('#pgScroll').innerHTML=h;
   $$('#pgScroll .pg-cell').forEach(el=>{
     let lpTimer=null;
-    el.addEventListener('touchstart',()=>{lpTimer=setTimeout(()=>{GAL.selMode=true;renderGallery();},500);},{passive:true});
+    el.addEventListener('touchstart',()=>{if(GAL.filter==='trash')return;lpTimer=setTimeout(()=>{GAL.selMode=true;renderGallery();},500);},{passive:true});
     el.addEventListener('touchmove',()=>{clearTimeout(lpTimer);},{passive:true});
     el.addEventListener('touchend',()=>{clearTimeout(lpTimer);},{passive:true});
     el.onclick=()=>{
       const i=Number(el.dataset.pgi);
+      if(GAL.filter==='trash'){openTrashSheet(GAL.filtered[i]);return;}
       if(GAL.selMode){if(GAL.selIdx.has(i))GAL.selIdx.delete(i);else GAL.selIdx.add(i);renderGallery();}
       else openViewer(i);
     };
@@ -13631,7 +13695,7 @@ function bindGalleryEvents(){
     if(GAL.selMode){
       if(GAL.selIdx.size){openSheet('已选 '+GAL.selIdx.size+' 项','<button class="btn primary" id="galDl" style="width:100%;margin-bottom:8px;">⬇️ 全部保存（可选文件夹）</button><button class="btn" id="galDel" style="width:100%;color:var(--red);">🗑 从记录中删除</button>');
         $('#galDl').onclick=()=>galSaveAll();
-        $('#galDel').onclick=()=>{GAL.selIdx.forEach(i=>{const it=GAL.filtered[i];if(it)removeMediaSrc(it.src);});GAL.selIdx=new Set();GAL.items=collectAllMedia(GAL.scope);closeSheet();renderGallery();toast('已删除');};
+        $('#galDel').onclick=()=>{const list=[];GAL.selIdx.forEach(i=>{const it=GAL.filtered[i];if(it){list.push({src:it.src,type:it.type,note:it.note,module:it.module,date:it.date});removeMediaSrc(it.src);}});trashMedia(list);GAL.selIdx=new Set();GAL.items=collectAllMedia(GAL.scope);closeSheet();renderGallery();toast('已移入回收站 🗑（'+list.length+'项）');};
       }else{GAL.selMode=false;renderGallery();}
     }else{GAL.selMode=true;renderGallery();}
   };
@@ -13652,9 +13716,9 @@ function bindGalleryEvents(){
   $('#pvPtu').onclick=()=>{const it=GAL.filtered[PV.idx];if(!it||it.type!=='image'){toast('P图仅支持图片');return;}$('#pv').classList.remove('open');openEditor(it.src,{src:it.src});};
   $('#pvDel').onclick=()=>{
     const it=GAL.filtered[PV.idx];if(!it)return;
-    openSheet('删除确认','<div class="fv" style="text-align:center;padding:8px 0 14px;">确定删除这张'+(it.type==='video'?'视频':'照片')+'？该操作会从记录中移除。</div><button class="btn" id="pvDelNo" style="width:100%;margin-bottom:8px;">取消</button><button class="btn primary" id="pvDelYes" style="width:100%;background:var(--red);border-color:var(--red);">删除</button>');
+    openSheet('删除确认','<div class="fv" style="text-align:center;padding:8px 0 14px;">删除这张'+(it.type==='video'?'视频':'照片')+'？<br>会移入回收站，保留 30 天可随时恢复。</div><button class="btn" id="pvDelNo" style="width:100%;margin-bottom:8px;">取消</button><button class="btn primary" id="pvDelYes" style="width:100%;background:var(--red);border-color:var(--red);">删除</button>');
     $('#pvDelNo').onclick=closeSheet;
-    $('#pvDelYes').onclick=()=>{removeMediaSrc(it.src);closeSheet();$('#pv').classList.remove('open');GAL.items=collectAllMedia(GAL.scope);renderGallery();toast('已删除');};
+    $('#pvDelYes').onclick=()=>{trashMedia([{src:it.src,type:it.type,note:it.note,module:it.module,date:it.date}]);removeMediaSrc(it.src);closeSheet();$('#pv').classList.remove('open');GAL.items=collectAllMedia(GAL.scope);renderGallery();toast('已移入回收站 🗑');};
   };
   /* P图编辑器 */
   $('#peBk').onclick=()=>{$('#pedit').classList.remove('open');};
