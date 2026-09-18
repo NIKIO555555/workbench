@@ -1376,8 +1376,27 @@ function openNavTree(){$('#navmask').classList.add('open');$('#navsheet').classL
 function closeNav(){$('#navmask').classList.remove('open');$('#navsheet').classList.remove('open');}
 
 /* ===== 通用表单/弹层 ===== */
-function openSheet(title,bodyHtml){$('#sheetTitle').textContent=title;$('#sheetBody').innerHTML=bodyHtml;$('#mask').classList.add('open');$('#sheet').classList.add('open');}
-function closeSheet(){$('#mask').classList.remove('open');$('#sheet').classList.remove('open');}
+/* ===== 手机侧滑返回接管：浮层（弹窗/图库/查看器/P图）逐层返回，不退出整个工作台 ===== */
+const WB_LAYERS=[];let __wbPopSkip=0;
+function wbLayerPush(name){WB_LAYERS.push(name);try{history.pushState({wbLayer:name},'');}catch(e){}}
+function wbLayerCloseManual(name){
+  const i=WB_LAYERS.lastIndexOf(name);
+  if(i<0)return; /* 该层不在栈里（如 popstate 已处理或本就未开）→ 不动历史栈 */
+  WB_LAYERS.splice(i,1);__wbPopSkip++;try{history.back();}catch(e){__wbPopSkip=Math.max(0,__wbPopSkip-1);}
+}
+window.addEventListener('popstate',()=>{
+  if(__wbPopSkip>0){__wbPopSkip--;return;}
+  const name=WB_LAYERS.pop();
+  if(!name)return;
+  if(name==='sheet'){try{closeSheet();}catch(e){}}
+  else if(name==='pv'){try{closePvLayer();}catch(e){}}
+  else if(name==='pedit'){try{closePeditLayer();}catch(e){}}
+  else if(name==='pgal'){try{closeGallery();}catch(e){}}
+});
+function closePvLayer(){wbLayerCloseManual('pv');const v=$('#pvBody video');if(v)try{v.pause();}catch(e){}$('#pv').classList.remove('open');}
+function closePeditLayer(){wbLayerCloseManual('pedit');$('#pedit').classList.remove('open');}
+function openSheet(title,bodyHtml){$('#sheetTitle').textContent=title;$('#sheetBody').innerHTML=bodyHtml;$('#mask').classList.add('open');$('#sheet').classList.add('open');wbLayerPush('sheet');}
+function closeSheet(){$('#mask').classList.remove('open');$('#sheet').classList.remove('open');wbLayerCloseManual('sheet');}
 function openForm(title,fields,initial,onSave){
   let html='';
   fields.forEach(f=>{
@@ -4976,7 +4995,7 @@ function exportData(){
   toast('已开始导出');
 }
 /* ===== 数据守护：升级数据完好确认 + 大备份（含 IndexedDB 媒体） ===== */
-const WB_BUILD='2026-09-19.8';
+const WB_BUILD='2026-09-19.9';
 function wbKeyCount(){let n=0;for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith('wb_'))n++;}return n;}
 function dataGuard(){
   try{
@@ -13661,10 +13680,10 @@ function openGallery(scope){
   GAL.scope=scope||'all';GAL.filter='all';GAL.selMode=false;GAL.selIdx=new Set();
   GAL.items=collectAllMedia(GAL.scope);
   GAL.cols=Number(localStorage.getItem('wb_gal_cols'))||4;
-  $('#pgal').classList.add('open');document.body.style.overflow='hidden';
+  $('#pgal').classList.add('open');document.body.style.overflow='hidden';wbLayerPush('pgal');
   renderGallery();
 }
-function closeGallery(){$('#pgal').classList.remove('open');document.body.style.overflow='';}
+function closeGallery(){wbLayerCloseManual('pgal');$('#pgal').classList.remove('open');document.body.style.overflow='';}
 /* ===== 图库回收站：删除先进回收站，30 天后自动清理 ===== */
 function trashMedia(items){
   const t=(getGlobal('trash')||[]).slice();
@@ -13830,16 +13849,16 @@ function bindGalleryEvents(){
   },{passive:true});
   wrap.addEventListener('touchend',()=>{if(pin){try{localStorage.setItem('wb_gal_cols',String(GAL.cols));}catch(e){}pin=null;}},{passive:true});
   /* 查看器 */
-  $('#pvBk').onclick=()=>{$('#pv').classList.remove('open');const v=$('#pvBody video');if(v)v.pause();};
-  $('#pvPtu').onclick=()=>{const it=GAL.filtered[PV.idx];if(!it||it.type!=='image'){toast('P图仅支持图片');return;}$('#pv').classList.remove('open');openEditor(it.src,{src:it.src});};
+  $('#pvBk').onclick=()=>{closePvLayer();};
+  $('#pvPtu').onclick=()=>{const it=GAL.filtered[PV.idx];if(!it||it.type!=='image'){toast('P图仅支持图片');return;}closePvLayer();openEditor(it.src,{src:it.src});};
   $('#pvDel').onclick=()=>{
     const it=GAL.filtered[PV.idx];if(!it)return;
     openSheet('删除确认','<div class="fv" style="text-align:center;padding:8px 0 14px;">删除这张'+(it.type==='video'?'视频':'照片')+'？<br>会移入回收站，保留 30 天可随时恢复。</div><button class="btn" id="pvDelNo" style="width:100%;margin-bottom:8px;">取消</button><button class="btn primary" id="pvDelYes" style="width:100%;background:var(--red);border-color:var(--red);">删除</button>');
     $('#pvDelNo').onclick=closeSheet;
-    $('#pvDelYes').onclick=()=>{trashMedia([{src:it.src,type:it.type,note:it.note,module:it.module,date:it.date}]);removeMediaSrc(it.src);closeSheet();$('#pv').classList.remove('open');GAL.items=collectAllMedia(GAL.scope);renderGallery();toast('已移入回收站 🗑');};
+    $('#pvDelYes').onclick=()=>{trashMedia([{src:it.src,type:it.type,note:it.note,module:it.module,date:it.date}]);removeMediaSrc(it.src);closeSheet();closePvLayer();GAL.items=collectAllMedia(GAL.scope);renderGallery();toast('已移入回收站 🗑');};
   };
   /* P图编辑器 */
-  $('#peBk').onclick=()=>{$('#pedit').classList.remove('open');};
+  $('#peBk').onclick=()=>{closePeditLayer();};
   $('#peSave').onclick=peSaveFlow;
   $$('#peTabs .pe-tab').forEach(t=>t.onclick=()=>{$$('#peTabs .pe-tab').forEach(x=>x.classList.remove('active'));t.classList.add('active');PE.tab=t.dataset.etab;peRenderPanel();});
   /* 查看器键盘：←/→ 切换，Esc 关闭 */
@@ -13861,7 +13880,7 @@ function uploadMediaToToday(src,type){
 function openViewer(idx){
   PV.idx=idx;PV.scale=1;
   const it=GAL.filtered[idx];if(!it)return;
-  $('#pv').classList.add('open');document.body.style.overflow='hidden';
+  $('#pv').classList.add('open');document.body.style.overflow='hidden';wbLayerPush('pv');
   pvRender();
 }
 function pvRender(){
@@ -13948,7 +13967,7 @@ function openEditor(src,origin,cb){
   ensureGalleryDom();
   PE={src:src,origin:origin?origin.src?origin:{src:origin}:null,filter:'none',adj:{bright:100,contrast:100,sat:100,hue:0,blur:0},tab:'filter',pickColor:false,cropRatio:0,cb:cb||null};
   $$('#peTabs .pe-tab').forEach((x,i)=>x.classList.toggle('active',i===0));
-  $('#pedit').classList.add('open');document.body.style.overflow='hidden';
+  $('#pedit').classList.add('open');document.body.style.overflow='hidden';wbLayerPush('pedit');
   const img=$('#peImg');img.style.filter='';img.style.transform='';
   img.onload=()=>peRenderPanel();
   img.src=src;
@@ -14070,7 +14089,7 @@ function peSaveFlow(){
       +(PE.origin?'<button class="btn" id="peSvRp" style="width:100%;margin-bottom:8px;">🔄 替换记录中的原图</button>':'')
       +(PE.origin?'<button class="btn" id="peSvBoth" style="width:100%;margin-bottom:8px;">✅ 两者都要</button>':'')
       +'<button class="btn" id="peSvNo" style="width:100%;">继续编辑</button>');
-    const done=(msg)=>{closeSheet();$('#pedit').classList.remove('open');document.body.style.overflow='';if(PE.cb)PE.cb(data);toast(msg);};
+    const done=(msg)=>{closeSheet();closePeditLayer();document.body.style.overflow='';if(PE.cb)PE.cb(data);toast(msg);};
     $('#peSvDl').onclick=()=>{downloadDataURL(data,'ptu_'+Date.now()+'.jpg');done('已保存到本地 ⬇️');};
     const rp=$('#peSvRp');if(rp)rp.onclick=()=>{replaceMediaSrc(PE.origin,data);GAL.items=collectAllMedia(GAL.scope);done('已替换原图 🔄');};
     const both=$('#peSvBoth');if(both)both.onclick=()=>{downloadDataURL(data,'ptu_'+Date.now()+'.jpg');replaceMediaSrc(PE.origin,data);GAL.items=collectAllMedia(GAL.scope);done('已保存+替换 ✅');};
