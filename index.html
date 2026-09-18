@@ -778,7 +778,7 @@
   /* ===== 多图层便签草稿台（仿 Notability 图层） ===== */
   .draft{position:fixed;inset:0;z-index:95;background:var(--bg);display:flex;flex-direction:column;transform:translateY(100%);transition:transform .28s cubic-bezier(.4,0,.2,1);visibility:hidden;}
   .draft.open{transform:translateY(0);visibility:visible;}
-  .dg-body{flex:1;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:10px;}
+  .dg-body{flex:1;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:10px;position:relative;}
   .dg-paper{position:relative;width:100%;max-width:560px;margin:0 auto;background:#fff;border-radius:6px;box-shadow:0 2px 14px rgba(0,0,0,.14);overflow:hidden;touch-action:none;}
   .dg-paper canvas{position:absolute;inset:0;width:100%;height:100%;display:block;}
   .dg-tools{flex:none;background:var(--card);border-top:1px solid var(--line);padding:8px 10px calc(10px + env(safe-area-inset-bottom));}
@@ -4995,7 +4995,7 @@ function exportData(){
   toast('已开始导出');
 }
 /* ===== 数据守护：升级数据完好确认 + 大备份（含 IndexedDB 媒体） ===== */
-const WB_BUILD='2026-09-19.10';
+const WB_BUILD='2026-09-19.11';
 function wbKeyCount(){let n=0;for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith('wb_'))n++;}return n;}
 function dataGuard(){
   try{
@@ -14097,30 +14097,88 @@ function peSaveFlow(){
   });
 }
 
-/* ===== 多图层便签草稿台（仿 Notability：底稿不动，全部标注画在图层上） ===== */
-const DG_W=1000,DG_H=1400;
+/* ===== 多图层便签草稿台（仿 Noteful：PDF 做题底稿 + 每页独立图层组，显隐/层级/不透明度/合并） ===== */
 const DG_COLORS=['#1a1a1a','#e0483a','#2f7de1','#1aa260','#e6a93c','#9b6cf0','#e27fa5','#ffffff'];
-let DG={layers:[],active:null,tool:'pen',color:'#e0483a',width:5,undo:[],bg:{mode:'plain',img:null,text:''}};
+let DG={pages:[],cur:0,active:null,tool:'pen',color:'#e0483a',width:5,undo:[],redo:[],bg:{mode:'plain',img:null,text:''},orient:'auto',w:1400,h:1000,pdf:null};
+/* PDF.js 懒加载（CDN） */
+let __pdfjsP=null;
+function loadPdfJs(){
+  if(window.pdfjsLib&&window.pdfjsLib.GlobalWorkerOptions)return Promise.resolve(window.pdfjsLib);
+  if(__pdfjsP)return __pdfjsP;
+  __pdfjsP=new Promise((res,rej)=>{
+    const s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js';
+    s.onload=()=>{try{window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';res(window.pdfjsLib);}catch(e){rej(e);}};
+    s.onerror=()=>{__pdfjsP=null;rej(new Error('网络不可用，无法加载 PDF 引擎'));};
+    document.head.appendChild(s);
+  });
+  return __pdfjsP;
+}
+/* 草稿专用 IndexedDB（图层 PNG / PDF 很大，localStorage 会爆配额） */
+let _dgDbP=null;
+function dgDbOpen(){
+  if(_dgDbP)return _dgDbP;
+  _dgDbP=new Promise(res=>{
+    try{const rq=indexedDB.open('wb_draftdb',1);
+      rq.onupgradeneeded=e=>{const db=e.target.result;if(!db.objectStoreNames.contains('draft'))db.createObjectStore('draft',{keyPath:'id'});};
+      rq.onsuccess=e=>res(e.target.result);rq.onerror=()=>res(null);
+    }catch(e){res(null);}
+  });
+  return _dgDbP;
+}
+function dgDbPut(id,str){return dgDbOpen().then(db=>new Promise(res=>{if(!db)return res(false);try{const tx=db.transaction('draft','readwrite');tx.objectStore('draft').put({id:id,data:str});tx.oncomplete=()=>res(true);tx.onerror=()=>res(false);}catch(e){res(false);}})).catch(()=>false);}
+function dgDbGet(id){return dgDbOpen().then(db=>new Promise(res=>{if(!db)return res(null);try{const rq=db.transaction('draft','readonly').objectStore('draft').get(id);rq.onsuccess=()=>res(rq.result?rq.result.data:null);rq.onerror=()=>res(null);}catch(e){res(null);}})).catch(()=>null);}
+function dgResolveMedia(t){return (t&&t.startsWith('idb:'))?(MEDIA_CACHE[t.slice(4)]||''):t;}
+function dgDefaultPage(){return {layers:[{id:'l'+Date.now()+Math.random().toString(36).slice(2,5),name:'图层 1',visible:true,opacity:1,data:null}]};}
+function dgCurPage(){if(!DG.pages[DG.cur])DG.pages[DG.cur]=dgDefaultPage();return DG.pages[DG.cur];}
+function dgCurLayers(){return dgCurPage().layers;}
+function dgComputeDims(){
+  if(DG.orient==='portrait'){DG.w=1000;DG.h=1400;return;}
+  if(DG.orient==='landscape'){DG.w=1400;DG.h=1000;return;}
+  /* auto：跟随底稿比例；纯纸默认横版 */
+  if(DG.pdf&&DG.pdf.aspect){DG.w=1000;DG.h=Math.max(500,Math.min(3000,Math.round(1000*DG.pdf.aspect)));return;}
+  if(DG.bg&&DG.bg.aspect){DG.w=1000;DG.h=Math.max(500,Math.min(3000,Math.round(1000*DG.bg.aspect)));return;}
+  DG.w=1400;DG.h=1000;
+}
 function draftLoad(){
-  try{const s=JSON.parse(localStorage.getItem('wb_draft')||'null');
-    if(s&&s.layers&&s.layers.length){DG.layers=s.layers;DG.active=s.active||s.layers[0].id;DG.bg=s.bg||{mode:'plain',img:null,text:''};}
-    else{DG.layers=[{id:'l'+Date.now(),name:'图层 1',visible:true,data:null}];DG.active=DG.layers[0].id;DG.bg={mode:'plain',img:null,text:''};}
-  }catch(e){DG.layers=[{id:'l'+Date.now(),name:'图层 1',visible:true,data:null}];DG.active=DG.layers[0].id;}
-  DG.undo=[];
+  dgDbGet('main').then(str=>{
+    let s=null;
+    try{s=str?JSON.parse(str):null;}catch(e){s=null;}
+    if(!s){try{s=JSON.parse(localStorage.getItem('wb_draft')||'null');}catch(e){s=null;}}
+    if(s&&s.pages&&s.pages.length){
+      DG.pages=s.pages;DG.cur=s.cur||0;DG.active=s.active;DG.bg=s.bg||{mode:'plain',img:null,text:''};
+      DG.orient=s.orient||'auto';DG.w=s.w||1000;DG.h=s.h||1400;DG.pdf=s.pdf||null;
+    }else if(s&&s.layers&&s.layers.length){
+      /* 旧版单层组结构迁移：原草稿变竖版第一页，不丢笔画 */
+      DG.pages=[{layers:s.layers}];DG.cur=0;DG.active=s.active||s.layers[0].id;DG.bg=s.bg||{mode:'plain',img:null,text:''};
+      DG.orient='portrait';DG.w=1000;DG.h=1400;DG.pdf=null;
+    }else{
+      DG.pages=[dgDefaultPage()];DG.cur=0;DG.orient='auto';dgComputeDims();
+    }
+    if(!DG.active||!dgCurLayers().some(l=>l.id===DG.active)){const ls=dgCurLayers();DG.active=ls[ls.length-1].id;}
+    /* 旧版大图底稿自动外置到 IDB，防止撑爆配额 */
+    try{if(DG.bg&&DG.bg.img&&DG.bg.img.startsWith('data:')&&DG.bg.img.length>20000){const src=DG.bg.img;const id='m'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);mextPut(src,id);MEXT_IDS.set(src,id);DG.bg.img='idb:'+id;const im=new Image();im.onload=()=>{DG.bg.aspect=im.height/im.width;dgComputeDims();};im.src=src;}}catch(e){}
+    DG.undo=[];DG.redo=[];
+    if($('#draft')&&$('#draft').classList.contains('open'))draftRenderPaper();
+  });
 }
 function draftSave(){
   try{
-    const s={layers:DG.layers,active:DG.active,bg:DG.bg};
-    localStorage.setItem('wb_draft',JSON.stringify(s));
-  }catch(e){toast('草稿太大，本地存储空间不足：建议导出PNG后清空');}
+    const s={pages:DG.pages,cur:DG.cur,active:DG.active,bg:DG.bg,orient:DG.orient,w:DG.w,h:DG.h,pdf:DG.pdf};
+    const str=JSON.stringify(s);
+    dgDbPut('main',str);
+    try{if(str.length<1500000)localStorage.setItem('wb_draft',str);else localStorage.removeItem('wb_draft');}catch(e){}
+  }catch(e){}
 }
 function ensureDraftDom(){
   if($('#draft'))return;
   document.body.insertAdjacentHTML('beforeend',
     '<div id="draft" class="draft">'
-    +'<div class="pg-top"><button class="pg-bk" id="dgBk">‹</button><div class="pg-tt" id="dgTt">✏️ 草稿台</div>'
-    +'<div class="pg-ops"><button id="dgUndo">↩️ 撤销</button><button id="dgLayers">🗂 图层</button><button id="dgBg">📄 底稿</button><button id="dgExport">⬇️</button></div></div>'
-    +'<div class="dg-body" id="dgBody"><div class="dg-paper" id="dgPaper"></div></div>'
+    +    '<div class="pg-top"><button class="pg-bk" id="dgBk">‹</button><div class="pg-tt" id="dgTt">✏️ 草稿台</div>'
+    +'<div class="pg-ops"><button id="dgUndo">↩️</button><button id="dgRedo">↪️</button><button id="dgLayers">🗂 图层</button><button id="dgBg">📄 底稿</button><button id="dgExport">⬇️</button></div></div>'
+    +'<div class="dg-body" id="dgBody"><div class="dg-paper" id="dgPaper"></div>'
+    +'<div id="dgPageBar" style="display:none;position:fixed;left:50%;transform:translateX(-50%);bottom:132px;z-index:80;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:99px;padding:5px 12px;box-shadow:0 4px 14px rgba(0,0,0,.16);">'
+    +'<button class="pg-bk" id="dgPrev" style="font-size:16px;">‹</button><span id="dgPageNo" style="font-size:12px;font-weight:800;min-width:52px;text-align:center;">1 / 1</span><button class="pg-bk" id="dgNext" style="font-size:16px;">›</button></div></div>'
     +'<div class="dg-tools">'
     +'<div class="dg-row" id="dgToolRow">'
     +'<span class="dg-tool on" data-dgtool="pen">✏️ 画笔</span><span class="dg-tool" data-dgtool="hl">🖍 荧光笔</span><span class="dg-tool" data-dgtool="line">📏 直线</span><span class="dg-tool" data-dgtool="text">🔤 文字</span><span class="dg-tool" data-dgtool="eraser">🧽 橡皮</span>'
@@ -14129,79 +14187,146 @@ function ensureDraftDom(){
     +'<input type="range" min="2" max="24" value="5" id="dgWidth" style="flex:1;min-width:80px;">'
     +'<button class="dg-mini" id="dgClearLyr">🧹 清空本层</button>'
     +'</div>'
-    +'<div class="dg-hint">所有笔迹都画在「图层」上，不碰底稿原文 · 点🗂图层可新增/显隐/排序</div>'
+    +'<div class="dg-hint">笔迹画在图层上，不碰底稿 · 🗂 图层可新建/显隐/排序/合并 · PDF 每页独立图层</div>'
     +'</div></div>'
     +'<button id="draftBall">✏️</button>');
   bindDraftEvents();
 }
-function dgActiveLayer(){return DG.layers.find(l=>l.id===DG.active);}
+function dgActiveLayer(){return dgCurLayers().find(l=>l.id===DG.active);}
 function dgCanvasOf(id){return $('#dgc_'+id);}
 function draftRenderPaper(){
   const paper=$('#dgPaper');if(!paper)return;
-  paper.style.aspectRatio=(DG_W+'/'+DG_H);
-  let h='<canvas id="dgBgC" width="'+DG_W+'" height="'+DG_H+'"></canvas>';
-  DG.layers.forEach(l=>{h+='<canvas id="dgc_'+l.id+'" width="'+DG_W+'" height="'+DG_H+'" style="'+(l.visible?'':'visibility:hidden;')+'"></canvas>';});
-  h+='<canvas id="dgLive" width="'+DG_W+'" height="'+DG_H+'"></canvas>';
+  paper.style.aspectRatio=(DG.w+'/'+DG.h);
+  let h='<canvas id="dgBgC" width="'+DG.w+'" height="'+DG.h+'"></canvas>';
+  dgCurLayers().forEach(l=>{h+='<canvas id="dgc_'+l.id+'" width="'+DG.w+'" height="'+DG.h+'" style="'+(l.visible?'':'visibility:hidden;')+'opacity:'+(l.opacity==null?1:l.opacity)+';"></canvas>';});
+  h+='<canvas id="dgLive" width="'+DG.w+'" height="'+DG.h+'"></canvas>';
   paper.innerHTML=h;
   /* 底稿绘制 */
   const bgc=$('#dgBgC'),ctx=bgc.getContext('2d');
-  ctx.fillStyle='#ffffff';ctx.fillRect(0,0,DG_W,DG_H);
-  if(DG.bg.img){
+  ctx.fillStyle='#ffffff';ctx.fillRect(0,0,DG.w,DG.h);
+  if(DG.pdf&&DG.pdf.token){
+    dgRenderPdfPage();
+  }else if(DG.bg.img){
     const img=new Image();
-    img.onload=()=>{const r=Math.max(DG_W/img.width,DG_H/img.height);const w=img.width*r,h2=img.height*r;ctx.drawImage(img,(DG_W-w)/2,(DG_H-h2)/2,w,h2);};
-    img.src=DG.bg.img;
+    img.onload=()=>{const r=Math.max(DG.w/img.width,DG.h/img.height);const w=img.width*r,h2=img.height*r;ctx.drawImage(img,(DG.w-w)/2,(DG.h-h2)/2,w,h2);};
+    img.src=dgResolveMedia(DG.bg.img);
   }else if(DG.bg.text){
     ctx.fillStyle='#333';ctx.font='28px sans-serif';ctx.textBaseline='top';
     const paras=String(DG.bg.text).split(/\n+/);
-    let y=64;const maxW=DG_W-96,lineH=44;
+    let y=64;const maxW=DG.w-96,lineH=44;
     paras.forEach(p=>{
       let line='';
       for(const ch of p){
-        if(ctx.measureText(line+ch).width>maxW){ctx.fillText(line,48,y);y+=lineH;line=ch;if(y>DG_H-40)return;}
+        if(ctx.measureText(line+ch).width>maxW){ctx.fillText(line,48,y);y+=lineH;line=ch;if(y>DG.h-40)return;}
         else line+=ch;
       }
       if(line){ctx.fillText(line,48,y);y+=lineH;}
     });
   }else if(DG.bg.mode==='ruled'){
     ctx.strokeStyle='#cfe0f5';ctx.lineWidth=1.5;
-    for(let y=120;y<DG_H;y+=70){ctx.beginPath();ctx.moveTo(40,y);ctx.lineTo(DG_W-40,y);ctx.stroke();}
+    for(let y=120;y<DG.h;y+=70){ctx.beginPath();ctx.moveTo(40,y);ctx.lineTo(DG.w-40,y);ctx.stroke();}
   }else if(DG.bg.mode==='grid'){
     ctx.strokeStyle='#dce8f5';ctx.lineWidth=1;
-    for(let x=40;x<DG_W;x+=50){ctx.beginPath();ctx.moveTo(x,40);ctx.lineTo(x,DG_H-40);ctx.stroke();}
-    for(let y=40;y<DG_H;y+=50){ctx.beginPath();ctx.moveTo(40,y);ctx.lineTo(DG_W-40,y);ctx.stroke();}
+    for(let x=40;x<DG.w;x+=50){ctx.beginPath();ctx.moveTo(x,40);ctx.lineTo(x,DG.h-40);ctx.stroke();}
+    for(let y=40;y<DG.h;y+=50){ctx.beginPath();ctx.moveTo(40,y);ctx.lineTo(DG.w-40,y);ctx.stroke();}
   }
-  /* 图层数据恢复 */
-  DG.layers.forEach(l=>{
+  /* 图层数据恢复（按当前画布尺寸缩放，换方向不丢笔画） */
+  dgCurLayers().forEach(l=>{
     if(!l.data)return;
     const cv=dgCanvasOf(l.id);if(!cv)return;
     const img=new Image();
-    img.onload=()=>{const c=cv.getContext('2d');c.clearRect(0,0,DG_W,DG_H);c.drawImage(img,0,0);};
+    img.onload=()=>{const c=cv.getContext('2d');c.clearRect(0,0,DG.w,DG.h);c.drawImage(img,0,0,DG.w,DG.h);};
     img.src=l.data;
   });
   const act=dgActiveLayer();
-  $('#dgTt').textContent='✏️ 草稿台 · '+(act?act.name:'-');
+  $('#dgTt').textContent='✏️ 草稿台 · '+(act?act.name:'-')+(DG.pdf?' · 第'+(DG.cur+1)+'页':'');
+  const pb=$('#dgPageBar');
+  if(pb){pb.style.display=DG.pdf?'flex':'none';if(DG.pdf)$('#dgPageNo').textContent=(DG.cur+1)+' / '+DG.pdf.num;}
+}
+async function dgRenderPdfPage(){
+  const bgc=$('#dgBgC');if(!bgc)return;
+  const ctx=bgc.getContext('2d');
+  ctx.fillStyle='#ffffff';ctx.fillRect(0,0,DG.w,DG.h);
+  const pdf=DG.pdf;if(!pdf||!pdf.token)return;
+  const b64=dgResolveMedia(pdf.token);
+  if(!b64){toast('PDF 数据缺失（可能被浏览器清理），请重新导入');return;}
+  try{
+    const lib=await loadPdfJs();
+    if(!pdf._doc){
+      const buf=Uint8Array.from(atob(b64.slice(b64.indexOf(',')+1)),c=>c.charCodeAt(0));
+      pdf._doc=await lib.getDocument({data:buf}).promise;
+    }
+    const page=await pdf._doc.getPage(Math.min(DG.cur+1,pdf.num));
+    const vp=page.getViewport({scale:1});
+    const scale=Math.min(DG.w/vp.width,DG.h/vp.height);
+    const vp2=page.getViewport({scale:scale});
+    const ox=(DG.w-vp2.width)/2,oy=(DG.h-vp2.height)/2;
+    await page.render({canvasContext:ctx,viewport:vp2,transform:(ox||oy)?[1,0,0,1,ox,oy]:null}).promise;
+  }catch(e){toast('PDF 渲染失败：'+((e&&e.message)||e));}
+}
+async function dgImportPdf(){
+  const inp=document.createElement('input');inp.type='file';inp.accept='application/pdf';
+  inp.onchange=async()=>{
+    const f=inp.files[0];if(!f)return;
+    toast('正在导入 PDF，请稍候…');
+    const rd=new FileReader();
+    rd.onload=async()=>{
+      try{
+        const dataUrl=rd.result;
+        const lib=await loadPdfJs();
+        const buf=Uint8Array.from(atob(dataUrl.slice(dataUrl.indexOf(',')+1)),c=>c.charCodeAt(0));
+        const doc=await lib.getDocument({data:buf}).promise;
+        const p1=await doc.getPage(1);const v1=p1.getViewport({scale:1});
+        /* PDF 本体外置 IndexedDB，草稿只留令牌 */
+        let token=dataUrl;
+        if(dataUrl.length>20000){const id='m'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);mextPut(dataUrl,id);MEXT_IDS.set(dataUrl,id);token='idb:'+id;}
+        dgSyncLayerSilent();
+        DG.pdf={token:token,num:doc.numPages,aspect:v1.height/v1.width};
+        DG.bg={mode:'plain',img:null,text:''};
+        DG.cur=0;DG.orient='auto';dgComputeDims();
+        DG.pages=[dgDefaultPage()];
+        const ls=dgCurLayers();DG.active=ls[ls.length-1].id;
+        DG.undo=[];DG.redo=[];
+        draftSave();closeSheet();draftRenderPaper();
+        toast('PDF 已导入：共 '+doc.numPages+' 页，每页独立图层 ✅');
+      }catch(e){toast('PDF 导入失败：'+((e&&e.message)||e));}
+    };
+    rd.readAsDataURL(f);
+  };
+  inp.click();
+}
+function dgSyncLayerSilent(){try{const cv=dgCanvasOf(DG.active);const l=dgActiveLayer();if(cv&&l)l.data=cv.toDataURL('image/png');}catch(e){}}
+function dgGotoPage(n){
+  if(!DG.pdf||n<0||n>=DG.pdf.num)return;
+  dgSyncLayerSilent();
+  DG.cur=n;DG.undo=[];DG.redo=[];
+  if(!DG.pages[DG.cur])DG.pages[DG.cur]=dgDefaultPage();
+  const ls=dgCurLayers();DG.active=ls[ls.length-1].id;
+  draftSave();draftRenderPaper();
 }
 function openDraftPad(opts){
   opts=opts||{};
   ensureDraftDom();
-  if(opts.reset){DG.layers=[{id:'l'+Date.now(),name:'图层 1',visible:true,data:null}];DG.active=DG.layers[0].id;DG.bg={mode:'plain',img:null,text:''};DG.undo=[];}
-  else if(!DG.layers.length)draftLoad();
-  if(opts.bgText){DG.bg={mode:'plain',img:null,text:opts.bgText};}
-  if(opts.bgImg){DG.bg={mode:'plain',img:opts.bgImg,text:''};}
-  $('#draft').classList.add('open');document.body.style.overflow='hidden';
+  if(!DG.pages.length){draftLoad();}
+  if(opts.reset){DG.pages=[dgDefaultPage()];DG.cur=0;DG.active=null;DG.bg={mode:'plain',img:null,text:''};DG.pdf=null;DG.orient='auto';dgComputeDims();DG.undo=[];DG.redo=[];}
+  if(opts.bgText){DG.bg={mode:'plain',img:null,text:opts.bgText};DG.pdf=null;if(DG.orient==='auto')dgComputeDims();DG.undo=[];DG.redo=[];}
+  if(opts.bgImg){DG.bg={mode:'plain',img:opts.bgImg,text:''};DG.pdf=null;const im=new Image();im.onload=()=>{if(DG.orient==='auto'){DG.bg.aspect=im.height/im.width;dgComputeDims();draftRenderPaper();}};im.src=dgResolveMedia(opts.bgImg);DG.undo=[];DG.redo=[];}
+  if(!DG.active||!dgCurLayers().some(l=>l.id===DG.active)){const ls=dgCurLayers();DG.active=ls[ls.length-1].id;}
+  $('#draft').classList.add('open');document.body.style.overflow='hidden';wbLayerPush('draft');
   draftRenderPaper();
   draftSave();
 }
-function closeDraftPad(){$('#draft').classList.remove('open');document.body.style.overflow='';draftSave();}
+function closeDraftPad(){wbLayerCloseManual('draft');$('#draft').classList.remove('open');document.body.style.overflow='';const pb=$('#dgPageBar');if(pb)pb.style.display='none';draftSave();}
 function dgPushUndo(){
   const cv=dgCanvasOf(DG.active);if(!cv)return;
   DG.undo.push({id:DG.active,data:cv.toDataURL('image/png')});
   if(DG.undo.length>12)DG.undo.shift();
+  DG.redo=[];
 }
 function dgCommitLive(){
   const live=$('#dgLive'),cv=dgCanvasOf(DG.active);if(!live||!cv)return;
   cv.getContext('2d').drawImage(live,0,0);
-  live.getContext('2d').clearRect(0,0,DG_W,DG_H);
+  live.getContext('2d').clearRect(0,0,DG.w,DG.h);
   dgSyncLayer();
 }
 function dgSyncLayer(){
@@ -14212,7 +14337,7 @@ function dgSyncLayer(){
 }
 function dgPt(e){
   const live=$('#dgLive');const r=live.getBoundingClientRect();
-  return {x:(e.clientX-r.left)/r.width*DG_W,y:(e.clientY-r.top)/r.height*DG_H};
+  return {x:(e.clientX-r.left)/r.width*DG.w,y:(e.clientY-r.top)/r.height*DG.h};
 }
 function bindDraftEvents(){
   $('#dgBk').onclick=closeDraftPad;
@@ -14228,16 +14353,29 @@ function bindDraftEvents(){
   $('#dgClearLyr').onclick=()=>{
     const cv=dgCanvasOf(DG.active);if(!cv)return;
     dgPushUndo();
-    cv.getContext('2d').clearRect(0,0,DG_W,DG_H);dgSyncLayer();toast('已清空当前图层');
+    cv.getContext('2d').clearRect(0,0,DG.w,DG.h);dgSyncLayer();toast('已清空当前图层');
   };
   $('#dgUndo').onclick=()=>{
     if(!DG.undo.length){toast('没有可撤销的操作');return;}
     const u=DG.undo.pop();
     const cv=dgCanvasOf(u.id);if(!cv)return;
     const img=new Image();
-    img.onload=()=>{const c=cv.getContext('2d');c.clearRect(0,0,DG_W,DG_H);c.drawImage(img,0,0);dgSyncLayer();};
+    img.onload=()=>{const c=cv.getContext('2d');c.clearRect(0,0,DG.w,DG.h);c.drawImage(img,0,0,DG.w,DG.h);dgSyncLayer();};
     img.src=u.data;
+    DG.redo.push(u);if(DG.redo.length>12)DG.redo.shift();
   };
+  const rb=$('#dgRedo');if(rb)rb.onclick=()=>{
+    if(!DG.redo.length){toast('没有可重做的操作');return;}
+    const u=DG.redo.pop();
+    const cv=dgCanvasOf(u.id);if(!cv)return;
+    const img=new Image();
+    img.onload=()=>{const c=cv.getContext('2d');c.clearRect(0,0,DG.w,DG.h);c.drawImage(img,0,0,DG.w,DG.h);dgSyncLayer();};
+    img.src=u.data;
+    DG.undo.push(u);
+  };
+  const pv=$('#dgPrev'),nx=$('#dgNext');
+  if(pv)pv.onclick=()=>dgGotoPage(DG.cur-1);
+  if(nx)nx.onclick=()=>dgGotoPage(DG.cur+1);
   $('#dgLayers').onclick=draftLayerPanel;
   $('#dgBg').onclick=draftBgPanel;
   $('#dgExport').onclick=draftExport;
@@ -14268,7 +14406,7 @@ function bindDraftEvents(){
     if(erasing){dgEraseAt(p);return;}
     const live=$('#dgLive'),ctx=live.getContext('2d');
     if(DG.tool==='line'){
-      ctx.clearRect(0,0,DG_W,DG_H);
+      ctx.clearRect(0,0,DG.w,DG.h);
       ctx.globalAlpha=1;ctx.lineWidth=DG.width;ctx.lineCap='round';
       ctx.strokeStyle=DG.color;
       ctx.beginPath();ctx.moveTo(start.x,start.y);ctx.lineTo(p.x,p.y);ctx.stroke();
@@ -14329,77 +14467,143 @@ function dgTextInput(p){
     dgPushUndo();
     const ctx=cv.getContext('2d');
     ctx.fillStyle=DG.color;ctx.font='bold '+size+'px sans-serif';ctx.textBaseline='top';
-    const maxW=DG_W-p.x-40;let line='',y=p.y;const lh=size*1.35;
+    const maxW=DG.w-p.x-40;let line='',y=p.y;const lh=size*1.35;
     for(const ch of txt){
-      if(ctx.measureText(line+ch).width>maxW&&line){ctx.fillText(line,p.x,y);y+=lh;line=ch;if(y>DG_H-40)break;}
+      if(ctx.measureText(line+ch).width>maxW&&line){ctx.fillText(line,p.x,y);y+=lh;line=ch;if(y>DG.h-40)break;}
       else line+=ch;
     }
-    if(line&&y<=DG_H-40)ctx.fillText(line,p.x,y);
+    if(line&&y<=DG.h-40)ctx.fillText(line,p.x,y);
     dgSyncLayer();
   };
 }
 function draftLayerPanel(){
-  let h='<button class="btn primary" id="dgAddLyr" style="width:100%;margin-bottom:10px;">➕ 新建图层</button>';
-  const rev=DG.layers.slice().reverse();
-  rev.forEach(l=>{
-    h+='<div class="dg-lyr'+(l.id===DG.active?' act':'')+'" data-lyr="'+l.id+'">'
+  const layers=dgCurLayers();
+  let h='<div style="display:flex;gap:8px;margin-bottom:10px;"><button class="btn primary" id="dgAddLyr" style="flex:1;">➕ 新建图层</button><button class="btn" id="dgDupLyr" style="flex:1;">⧉ 复制本层</button></div>';
+  const rev=layers.map((l,i)=>({l,i})).reverse();
+  rev.forEach(({l,i})=>{
+    h+='<div class="dg-lyr'+(l.id===DG.active?' act':'')+'" data-lyr="'+l.id+'" style="display:flex;align-items:center;gap:8px;padding:7px 8px;">'
+    +'<canvas width="44" height="58" data-lyrthumb="'+l.id+'" style="width:33px;height:44px;border:1px solid var(--line);border-radius:6px;background:#fff;flex:none;"></canvas>'
+    +'<div style="flex:1;min-width:0;"><div style="display:flex;align-items:center;gap:6px;">'
     +'<span class="op" data-lyreye="'+l.id+'">'+(l.visible?'👁':'🚫')+'</span>'
-    +'<span class="nm" data-lyrnm="'+l.id+'">'+esc(l.name)+'</span>'
-    +'<span class="op" data-lyrup="'+l.id+'">⬆️</span><span class="op" data-lyrdn="'+l.id+'">⬇️</span>'
-    +'<span class="op" data-lyrdel="'+l.id+'">🗑</span>'
-    +'</div>';
+    +'<span class="nm" data-lyrnm="'+l.id+'" style="font-weight:800;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(l.name)+(l.id===DG.active?' <span class="pill" style="background:var(--brand);color:#fff;font-size:9px;">当前</span>':'')+'</span></div>'
+    +'<input type="range" min="10" max="100" value="'+Math.round((l.opacity==null?1:l.opacity)*100)+'" data-lyrop="'+l.id+'" style="width:100%;height:20px;">'
+    +'</div>'
+    +'<div style="display:flex;flex-direction:column;gap:2px;flex:none;">'
+    +'<span class="op" data-lyrup="'+l.id+'" style="font-size:11px;">⬆️</span><span class="op" data-lyrdn="'+l.id+'" style="font-size:11px;">⬇️</span>'
+    +'</div>'
+    +'<div style="display:flex;flex-direction:column;gap:2px;flex:none;">'
+    +'<span class="op" data-lyrmerge="'+l.id+'" style="font-size:11px;" title="向下合并">⤵️</span><span class="op" data-lyrdel="'+l.id+'" style="font-size:11px;">🗑</span>'
+    +'</div></div>';
   });
-  h+='<div class="card-sub">最上面的是最顶层。点名称重命名；👁 控制显隐；⬆️⬇️ 调整顺序。标注永远不动底稿。</div>';
-  openSheet('🗂 图层管理（当前 '+DG.layers.length+' 层）',h);
+  h+='<div class="card-sub">最上面是最顶层（和 Noteful 一致）。👁 显隐 · 滑杆调不透明度 · ⬆️⬇️ 调层级 · ⤵️ 向下合并 · 点名称重命名。PDF 每页都有独立的一组图层。</div>';
+  openSheet('🗂 图层管理（第'+(DG.cur+1)+'页 · '+layers.length+' 层）',h);
+  /* 缩略图 */
+  $$('#sheetBody [data-lyrthumb]').forEach(tc=>{
+    const l=layers.find(x=>x.id===tc.dataset.lyrthumb);
+    if(l&&l.data){const im=new Image();im.onload=()=>{const c=tc.getContext('2d');c.clearRect(0,0,tc.width,tc.height);const r=Math.min(tc.width/im.width,tc.height/im.height);c.drawImage(im,(tc.width-im.width*r)/2,(tc.height-im.height*r)/2,im.width*r,im.height*r);};im.src=l.data;}
+  });
   $('#dgAddLyr').onclick=()=>{
-    DG.layers.push({id:'l'+Date.now(),name:'图层 '+(DG.layers.length+1),visible:true,data:null});
-    DG.active=DG.layers[DG.layers.length-1].id;
+    const ls=dgCurLayers();
+    ls.push({id:'l'+Date.now(),name:'图层 '+(ls.length+1),visible:true,opacity:1,data:null});
+    DG.active=ls[ls.length-1].id;
     draftSave();closeSheet();draftRenderPaper();draftLayerPanel();
   };
+  $('#dgDupLyr').onclick=()=>{
+    const ls=dgCurLayers();const src=ls.find(x=>x.id===DG.active);if(!src)return;
+    const cp={id:'l'+Date.now(),name:src.name+' 副本',visible:true,opacity:src.opacity==null?1:src.opacity,data:src.data};
+    const i=ls.findIndex(x=>x.id===src.id);
+    ls.splice(i+1,0,cp);DG.active=cp.id;
+    draftSave();closeSheet();draftRenderPaper();draftLayerPanel();toast('已复制图层 ⧉');
+  };
   $$('#sheetBody [data-lyreye]').forEach(el=>el.onclick=()=>{
-    const l=DG.layers.find(x=>x.id===el.dataset.lyreye);if(!l)return;
+    const l=dgCurLayers().find(x=>x.id===el.dataset.lyreye);if(!l)return;
     l.visible=!l.visible;draftSave();closeSheet();draftRenderPaper();draftLayerPanel();
   });
+  $$('#sheetBody [data-lyrop]').forEach(el=>el.onchange=()=>{
+    const l=dgCurLayers().find(x=>x.id===el.dataset.lyrop);if(!l)return;
+    l.opacity=Number(el.value)/100;
+    const cv=dgCanvasOf(l.id);if(cv)cv.style.opacity=l.opacity;
+    draftSave();
+  });
   $$('#sheetBody [data-lyrnm]').forEach(el=>el.onclick=()=>{
-    const l=DG.layers.find(x=>x.id===el.dataset.lyrnm);if(!l)return;
+    const l=dgCurLayers().find(x=>x.id===el.dataset.lyrnm);if(!l)return;
     const nm=prompt('图层名称',l.name);
     if(nm&&nm.trim()){l.name=nm.trim();draftSave();closeSheet();draftRenderPaper();draftLayerPanel();}
   });
   $$('#sheetBody [data-lyrup]').forEach(el=>el.onclick=()=>{
-    const i=DG.layers.findIndex(x=>x.id===el.dataset.lyrup);
-    if(i>=0&&i<DG.layers.length-1){const t=DG.layers[i];DG.layers[i]=DG.layers[i+1];DG.layers[i+1]=t;draftSave();closeSheet();draftRenderPaper();draftLayerPanel();}
+    const ls=dgCurLayers();
+    const i=ls.findIndex(x=>x.id===el.dataset.lyrup);
+    if(i>=0&&i<ls.length-1){const t=ls[i];ls[i]=ls[i+1];ls[i+1]=t;draftSave();closeSheet();draftRenderPaper();draftLayerPanel();}
   });
   $$('#sheetBody [data-lyrdn]').forEach(el=>el.onclick=()=>{
-    const i=DG.layers.findIndex(x=>x.id===el.dataset.lyrdn);
-    if(i>0){const t=DG.layers[i];DG.layers[i]=DG.layers[i-1];DG.layers[i-1]=t;draftSave();closeSheet();draftRenderPaper();draftLayerPanel();}
+    const ls=dgCurLayers();
+    const i=ls.findIndex(x=>x.id===el.dataset.lyrdn);
+    if(i>0){const t=ls[i];ls[i]=ls[i-1];ls[i-1]=t;draftSave();closeSheet();draftRenderPaper();draftLayerPanel();}
+  });
+  $$('#sheetBody [data-lyrmerge]').forEach(el=>el.onclick=()=>{
+    const ls=dgCurLayers();
+    const i=ls.findIndex(x=>x.id===el.dataset.lyrmerge);
+    if(i<=0){toast('已经是最底层，没有可合并的图层');return;}
+    const top=ls[i],low=ls[i-1];
+    dgSyncLayerSilent();
+    const tcv=document.createElement('canvas');tcv.width=DG.w;tcv.height=DG.h;
+    const tc=tcv.getContext('2d');
+    const load=(src)=>new Promise(res=>{if(!src)return res(null);const im=new Image();im.onload=()=>res(im);im.onerror=()=>res(null);im.src=src;});
+    Promise.all([load(low.data),load(top.data)]).then(([a,b])=>{
+      if(a)tc.drawImage(a,0,0,DG.w,DG.h);
+      if(b){tc.globalAlpha=top.opacity==null?1:top.opacity;tc.drawImage(b,0,0,DG.w,DG.h);tc.globalAlpha=1;}
+      low.data=tcv.toDataURL('image/png');low.opacity=1;
+      ls.splice(i,1);DG.active=low.id;
+      draftSave();closeSheet();draftRenderPaper();draftLayerPanel();toast('已向下合并 ⤵️');
+    });
   });
   $$('#sheetBody [data-lyrdel]').forEach(el=>el.onclick=()=>{
-    if(DG.layers.length<=1){toast('至少保留一个图层');return;}
-    const i=DG.layers.findIndex(x=>x.id===el.dataset.lyrdel);
-    if(i>=0){DG.layers.splice(i,1);if(DG.active===el.dataset.lyrdel)DG.active=DG.layers[Math.max(0,i-1)].id;draftSave();closeSheet();draftRenderPaper();draftLayerPanel();}
+    const ls=dgCurLayers();
+    if(ls.length<=1){toast('至少保留一个图层');return;}
+    const i=ls.findIndex(x=>x.id===el.dataset.lyrdel);
+    if(i>=0){ls.splice(i,1);if(DG.active===el.dataset.lyrdel)DG.active=ls[Math.max(0,i-1)].id;draftSave();closeSheet();draftRenderPaper();draftLayerPanel();}
   });
   $$('#sheetBody [data-lyr]').forEach(el=>el.onclick=e=>{
     const d=e.target.dataset;
-    if(d.lyreye||d.lyrnm||d.lyrup||d.lyrdn||d.lyrdel)return;
+    if(d.lyreye||d.lyrnm||d.lyrup||d.lyrdn||d.lyrdel||d.lyrmerge||d.lyrop!==undefined||d.lyrthumb)return;
     DG.active=el.dataset.lyr;draftSave();closeSheet();draftRenderPaper();draftLayerPanel();
   });
 }
 function draftBgPanel(){
-  let h='<button class="btn" data-dgbg="plain" style="width:100%;margin-bottom:8px;">📄 纯白纸</button>'
+  let h='<button class="btn primary" id="dgBgPdf" style="width:100%;margin-bottom:8px;">📑 导入 PDF 做题（每页独立图层）</button>'
+  +'<button class="btn" data-dgbg="plain" style="width:100%;margin-bottom:8px;">📄 纯白纸</button>'
   +'<button class="btn" data-dgbg="ruled" style="width:100%;margin-bottom:8px;">📝 横线纸（笔记）</button>'
   +'<button class="btn" data-dgbg="grid" style="width:100%;margin-bottom:8px;">🔲 方格纸（手账）</button>'
   +'<button class="btn" id="dgBgImg" style="width:100%;margin-bottom:8px;">🖼 上传图片底稿（试卷/资料照片）</button>'
   +'<button class="btn" id="dgBgTxt" style="width:100%;margin-bottom:8px;">🔤 粘贴文字底稿（文章原文）</button>'
   +'<button class="btn" id="dgBgClear" style="width:100%;color:var(--red);">🧹 清除底稿</button>'
-  +'<div class="card-sub" style="margin-top:10px;">Notability 玩法：底稿放试卷/文章原文，所有涂改画在图层上，原文永远不被破坏。</div>';
+  +'<div class="gtitle" style="margin-top:12px;">📐 画布方向</div>'
+  +'<div style="display:flex;gap:8px;">'
+  +'<button class="btn" data-dgor="auto" style="flex:1;">🔄 自动跟随底稿</button>'
+  +'<button class="btn" data-dgor="landscape" style="flex:1;">Horizontal 横版</button>'
+  +'<button class="btn" data-dgor="portrait" style="flex:1;">Vertical 竖版</button>'
+  +'</div>'
+  +'<div class="card-sub" style="margin-top:10px;">Noteful 玩法：导入 PDF 后每页都有独立图层组，做题笔迹分图层管理（草稿层/错题标记层/订正层…），可显隐、调层级、合并，导出时只合成可见层。自动方向=跟随 PDF/图片比例，纯纸默认横版。</div>';
   openSheet('📄 底稿设置',h);
   $$('#sheetBody [data-dgbg]').forEach(el=>el.onclick=()=>{
-    DG.bg={mode:el.dataset.dgbg,img:null,text:''};
+    DG.bg={mode:el.dataset.dgbg,img:null,text:''};DG.pdf=null;
+    if(DG.orient==='auto')dgComputeDims();
+    DG.pages=[dgDefaultPage()];DG.cur=0;const ls=dgCurLayers();DG.active=ls[ls.length-1].id;
     draftSave();closeSheet();draftRenderPaper();
   });
+  $$('#sheetBody [data-dgor]').forEach(el=>el.onclick=()=>{
+    DG.orient=el.dataset.dgor;dgComputeDims();
+    draftSave();closeSheet();draftRenderPaper();toast('画布已切换为'+(DG.orient==='portrait'?'竖版':(DG.orient==='landscape'?'横版':'自动'))+' 📐');
+  });
+  $('#dgBgPdf').onclick=dgImportPdf;
   $('#dgBgImg').onclick=()=>{
     pickMedia(src=>{
-      DG.bg={mode:'plain',img:src,text:''};
+      /* 大图外置 IndexedDB，草稿只留令牌 */
+      if(src&&src.length>20000&&src.startsWith('data:')){const id='m'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);mextPut(src,id);MEXT_IDS.set(src,id);src='idb:'+id;}
+      DG.bg={mode:'plain',img:src,text:''};DG.pdf=null;
+      const im=new Image();
+      im.onload=()=>{if(DG.orient==='auto'){DG.bg.aspect=im.height/im.width;dgComputeDims();draftRenderPaper();}};
+      im.src=dgResolveMedia(src);
       draftSave();closeSheet();draftRenderPaper();toast('图片底稿已设置 🖼');
     });
   };
@@ -14409,22 +14613,24 @@ function draftBgPanel(){
       openSheet('🔤 文字底稿','<textarea class="inp" id="dgBgTa" rows="8" placeholder="把要精读/涂改的外语原文粘贴到这里…" style="width:100%;">'+esc(DG.bg.text||'')+'</textarea><button class="btn primary" id="dgBgOk" style="width:100%;margin-top:10px;">✅ 设为底稿</button>');
       $('#dgBgOk').onclick=()=>{
         const t=$('#dgBgTa').value.trim();if(!t){toast('请粘贴文字');return;}
-        DG.bg={mode:'plain',img:null,text:t};draftSave();closeSheet();draftRenderPaper();toast('文字底稿已设置 ✅');
+        DG.bg={mode:'plain',img:null,text:t};DG.pdf=null;draftSave();closeSheet();draftRenderPaper();toast('文字底稿已设置 ✅');
       };
     },150);
   };
-  $('#dgBgClear').onclick=()=>{DG.bg={mode:'plain',img:null,text:''};draftSave();closeSheet();draftRenderPaper();};
+  $('#dgBgClear').onclick=()=>{DG.bg={mode:'plain',img:null,text:''};DG.pdf=null;draftSave();closeSheet();draftRenderPaper();};
 }
 function draftExport(){
-  const cv=document.createElement('canvas');cv.width=DG_W;cv.height=DG_H;
+  dgSyncLayerSilent();
+  const cv=document.createElement('canvas');cv.width=DG.w;cv.height=DG.h;
   const ctx=cv.getContext('2d');
+  ctx.fillStyle='#ffffff';ctx.fillRect(0,0,DG.w,DG.h);
   const bgc=$('#dgBgC');if(bgc)ctx.drawImage(bgc,0,0);
-  DG.layers.forEach(l=>{
+  dgCurLayers().forEach(l=>{
     if(!l.visible)return;
-    const c=dgCanvasOf(l.id);if(c)ctx.drawImage(c,0,0);
+    const c=dgCanvasOf(l.id);if(c)ctx.globalAlpha=(l.opacity==null?1:l.opacity),ctx.drawImage(c,0,0),ctx.globalAlpha=1;
   });
-  downloadDataURL(cv.toDataURL('image/png'),'draft_'+Date.now()+'.png');
-  toast('已导出 PNG ⬇️');
+  downloadDataURL(cv.toDataURL('image/png'),'draft_p'+(DG.cur+1)+'_'+Date.now()+'.png');
+  toast('已导出当前页 PNG ⬇️');
 }
 /* 浮动球显隐：外语/学习相关页面显示 */
 function syncDraftBall(){
