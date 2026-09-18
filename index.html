@@ -13210,6 +13210,14 @@ function bindGalleryEvents(){
   $('#peBk').onclick=()=>{$('#pedit').classList.remove('open');};
   $('#peSave').onclick=peSaveFlow;
   $$('#peTabs .pe-tab').forEach(t=>t.onclick=()=>{$$('#peTabs .pe-tab').forEach(x=>x.classList.remove('active'));t.classList.add('active');PE.tab=t.dataset.etab;peRenderPanel();});
+  /* 查看器键盘：←/→ 切换，Esc 关闭 */
+  document.addEventListener('keydown',e=>{
+    const pv=$('#pv');if(!pv||!pv.classList.contains('open'))return;
+    const isImg=!!pv.querySelector('img');
+    if(e.key==='ArrowLeft'&&isImg)pvNav(-1);
+    else if(e.key==='ArrowRight'&&isImg)pvNav(1);
+    else if(e.key==='Escape'){pv.classList.remove('open');const v=pv.querySelector('video');if(v)v.pause();}
+  });
 }
 function uploadMediaToToday(src,type){
   const t=todayStr();const r=getRec('photo',t)||{items:[]};
@@ -13231,17 +13239,34 @@ function pvRender(){
   if(it.type==='video'){
     body.innerHTML='<video src="'+it.src+'" controls autoplay playsinline></video>';
     const v=body.querySelector('video');v.playbackRate=window.__pvRate||1;
-    $('#pvCtrl').innerHTML=[0.5,0.75,1,1.25,1.5,2].map(r=>'<span class="pv-sp'+((window.__pvRate||1)===r?' on':'')+'" data-rate="'+r+'">'+r+'x</span>').join('');
-    $$('#pvCtrl .pv-sp').forEach(el=>el.onclick=()=>{window.__pvRate=Number(el.dataset.rate);v.playbackRate=window.__pvRate;$$('#pvCtrl .pv-sp').forEach(x=>x.classList.remove('on'));el.classList.add('on');});
+    $('#pvCtrl').innerHTML='<div style="display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;">'
+      +'<button class="pv-sp" id="pvPrevBtn">‹ 上一张</button>'
+      +[0.5,0.75,1,1.25,1.5,2].map(r=>'<span class="pv-sp'+((window.__pvRate||1)===r?' on':'')+'" data-rate="'+r+'">'+r+'x</span>').join('')
+      +'<button class="pv-sp" id="pvNextBtn">下一张 ›</button></div>';
+    $$('#pvCtrl .pv-sp[data-rate]').forEach(el=>el.onclick=()=>{window.__pvRate=Number(el.dataset.rate);v.playbackRate=window.__pvRate;$$('#pvCtrl .pv-sp[data-rate]').forEach(x=>x.classList.remove('on'));el.classList.add('on');});
+    const pp=$('#pvPrevBtn');if(pp)pp.onclick=()=>pvNav(-1);
+    const pn=$('#pvNextBtn');if(pn)pn.onclick=()=>pvNav(1);
   }else{
     body.innerHTML='<img src="'+it.src+'" draggable="false">';
-    $('#pvCtrl').innerHTML='<span class="pv-sp on">双击放大 · 左右滑动切换</span>';
+    $('#pvCtrl').innerHTML='<div style="display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;">'
+      +'<button class="pv-sp" id="pvPrevBtn">‹ 上一张</button>'
+      +'<span class="pv-sp on">双击放大 · 左右滑动/拖动切换</span>'
+      +'<button class="pv-sp" id="pvNextBtn">下一张 ›</button></div>';
+    $('#pvPrevBtn').onclick=()=>pvNav(-1);
+    $('#pvNextBtn').onclick=()=>pvNav(1);
     pvBindImg();
   }
 }
+function pvNav(d){
+  const n=GAL.filtered.length;if(!n)return;
+  PV.idx=(PV.idx+d+n)%n;PV.scale=1;pvRender();
+}
 function pvBindImg(){
   const body=$('#pvBody');const img=body.querySelector('img');if(!img)return;
-  let x0=null,y0=null,t0=0,lastTap=0,pin0=null,s0=1;
+  img.ondragstart=e=>e.preventDefault();
+  let x0=null,y0=null,t0=0,lastTap=0,pin0=null,s0=1,mDown=null;
+  const zoomToggle=()=>{PV.scale=PV.scale>1?1:2.2;img.style.transition='transform .22s';img.style.transform='scale('+PV.scale+')';setTimeout(()=>img.style.transition='',240);};
+  /* 触屏：双击缩放 / 双指捏合 / 滑动切换 */
   img.addEventListener('touchstart',e=>{
     if(e.touches.length===2){pin0=pinchDist(e.touches);s0=PV.scale;}
     else{const t=e.touches[0];x0=t.clientX;y0=t.clientY;t0=Date.now();}
@@ -13260,16 +13285,23 @@ function pvBindImg(){
     x0=y0=null;
     if(dt<280&&Math.abs(dx)<12&&Math.abs(dy)<12){ /* 双击 */
       const now=Date.now();
-      if(now-lastTap<300){PV.scale=PV.scale>1?1:2.2;img.style.transition='transform .22s';img.style.transform='scale('+PV.scale+')';setTimeout(()=>img.style.transition='',240);lastTap=0;}
+      if(now-lastTap<300){zoomToggle();lastTap=0;}
       else lastTap=now;
       return;
     }
     if(PV.scale>1.05)return; /* 放大时滑动=平移，暂不处理 */
     if(Math.abs(dx)>42&&Math.abs(dx)>Math.abs(dy)){
-      if(dx>0){if(PV.idx>0){PV.idx--;pvRender();}}
-      else{if(PV.idx<GAL.filtered.length-1){PV.idx++;pvRender();}else toast('已是最后一张');}
+      pvNav(dx>0?-1:1);
     }
   },{passive:true});
+  /* 鼠标（电脑端）：双击缩放 / 按住拖动切换 */
+  img.addEventListener('dblclick',e=>{e.preventDefault();zoomToggle();});
+  img.addEventListener('mousedown',e=>{mDown={x:e.clientX,y:e.clientY,t:Date.now()};});
+  img.addEventListener('mouseup',e=>{
+    if(!mDown)return;
+    const dx=e.clientX-mDown.x,dy=e.clientY-mDown.y;mDown=null;
+    if(Math.abs(dx)>40&&Math.abs(dx)>Math.abs(dy)){e.preventDefault();pvNav(dx>0?-1:1);}
+  });
 }
 /* ===== P图编辑器（仿醒图） ===== */
 function peCSS(){
