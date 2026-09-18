@@ -1639,7 +1639,11 @@ function bgmSet(k,v){const c=getGlobal('bgmConf')||{};c[k]=v;setGlobal('bgmConf'
 function bgmA(){
   if(!__bgmAudio){
     __bgmAudio=new Audio();
-    __bgmAudio.addEventListener('ended',()=>{if(bgmGet('on',true)&&!__bgmLocal)bgmPlay(bgmGet('idx',0)+1);});
+    __bgmAudio.addEventListener('ended',()=>{
+      if(!bgmGet('on',true))return;
+      if(__bgmLocal&&__bgmLocal.lib&&__bgmLocal.ids&&__bgmLocal.ids.length){bgmPlayLib(__bgmLocal.ids[(__bgmLocal.i+1)%__bgmLocal.ids.length]);}
+      else if(!__bgmLocal)bgmPlay(bgmGet('idx',0)+1);
+    });
     __bgmAudio.addEventListener('timeupdate',()=>bgmLrcTick());
     __bgmAudio.addEventListener('playing',()=>{bgmSetIcon(true);bgmFxStart();});
     __bgmAudio.addEventListener('pause',()=>{bgmSetIcon(false);bgmFxStop();});
@@ -1673,6 +1677,37 @@ function parseLrc(t){
 function bgmCurName(){
   if(__bgmLocal)return __bgmLocal.name;
   return (BGM_LIST[bgmGet('idx',0)||0]||{}).n||'';
+}
+/* —— 本地曲库：IndexedDB 持久化 —— */
+function bgmDB(){
+  return new Promise(res=>{
+    try{
+      const rq=indexedDB.open('wb_bgm',1);
+      rq.onupgradeneeded=e=>{const db=e.target.result;if(!db.objectStoreNames.contains('songs'))db.createObjectStore('songs',{keyPath:'id'});};
+      rq.onsuccess=e=>res(e.target.result);
+      rq.onerror=()=>res(null);
+    }catch(e){res(null);}
+  });
+}
+function bgmDBAll(db){
+  return new Promise(res=>{
+    if(!db)return res([]);
+    try{const rq=db.transaction('songs','readonly').objectStore('songs').getAll();rq.onsuccess=()=>res(rq.result||[]);rq.onerror=()=>res([]);}catch(e){res([]);}
+  });
+}
+function bgmDBPut(db,s){return new Promise(res=>{try{const tx=db.transaction('songs','readwrite');tx.objectStore('songs').put(s);tx.oncomplete=res;tx.onerror=res;}catch(e){res();}});}
+function bgmDBDel(db,id){return new Promise(res=>{try{const tx=db.transaction('songs','readwrite');tx.objectStore('songs').delete(id);tx.oncomplete=res;tx.onerror=res;}catch(e){res();}});}
+async function bgmPlayLib(id){
+  const db=await bgmDB();
+  const all=await bgmDBAll(db);
+  const i=all.findIndex(s=>s.id===id);
+  const s=all[i];
+  if(!s){toast('歌曲不存在');return;}
+  if(__bgmLocal&&__bgmLocal.url)try{URL.revokeObjectURL(__bgmLocal.url);}catch(e){}
+  __bgmLocal={url:URL.createObjectURL(s.blob),name:s.name,lrc:s.lrc?parseLrc(s.lrc):null,lib:true,ids:all.map(x=>x.id),i:i};
+  bgmSet('on',true);
+  const a=bgmA();a.dataset.src='local';a.src=__bgmLocal.url;a.volume=(bgmGet('vol',40)||40)/100;
+  a.play().then(()=>{toast('🎵 播放：'+s.name);renderBgmBar();if($('#sheet').classList.contains('open')&&$('#sheetTitle').textContent.includes('背景音乐'))openBgmPanel();}).catch(()=>{toast('播放被拦截，再点一下页面');});
 }
 function bgmLrcTick(){
   const el=$('#bgmLyric');if(!el)return;
@@ -1735,8 +1770,10 @@ function bgmBoot(){
 }
 function openBgmPanel(){
   const conf=()=>getGlobal('bgmConf')||{on:true,vol:40,fx:true,idx:0,ne:''};
-  const draw=()=>{
+  const draw=async()=>{
     const c=conf();
+    const db=await bgmDB();
+    const lib=await bgmDBAll(db);
     let h='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">'+
       '<div style="font-weight:800;font-size:13.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(bgmIsPlaying()?'🔊 正在播放：'+esc(bgmCurName()):'⏸ 未在播放')+'</div>'+
       '<button class="btn sm primary" id="bgmPP">'+(bgmIsPlaying()?'⏸':'▶️')+'</button></div>';
@@ -1747,11 +1784,16 @@ function openBgmPanel(){
     /* 区1 内置歌单 */
     h+='<div class="gtitle">🎵 内置歌单（免版权 · 随工作台加载）</div>';
     h+=BGM_LIST.map((it,i)=>'<div class="list-item" data-bgmi="'+i+'" style="cursor:pointer;'+(!__bgmLocal&&bgmGet('idx',0)===i&&bgmIsPlaying()?'background:var(--brand-light);':'')+'"><div class="li-head"><span class="t">'+esc(it.n)+'</span><span style="font-size:10px;color:var(--sub);">'+esc(it.a)+'</span></div></div>').join('');
-    /* 区2 本地导入 */
-    h+='<div class="gtitle">📁 本地导入（手机/电脑里的歌）</div>';
-    h+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;"><button class="btn sm" id="bgmLocal">🎧 选歌曲文件</button><button class="btn sm" id="bgmLrcBtn">📝 配 .lrc 歌词</button>'+(__bgmLocal?'<span class="pill" style="background:var(--brand);color:#fff;">'+esc(__bgmLocal.name)+'</span>':'')+'</div>';
-    h+='<div style="font-size:10.5px;color:var(--sub);margin-bottom:4px;">先选歌曲，再选同名 .lrc 歌词文件即可同步歌词飘字；不配歌词则显示歌名。</div>';
-    if(__bgmLocal)h+='<button class="btn primary sm" id="bgmLocalGo" style="width:100%;margin-bottom:8px;">▶️ 播放本地歌曲</button>';
+    /* 区2 本地曲库（IndexedDB 持久化） */
+    h+='<div class="gtitle">📁 本地曲库（存进浏览器 · 关机不丢）</div>';
+    h+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;"><button class="btn primary sm" id="bgmUp">⬆️ 上传歌曲（可多选）</button>'+(lib.length?'<button class="btn sm" id="bgmLibAll">▶️ 一键播放曲库</button>':'')+'</div>';
+    h+='<div style="font-size:10.5px;color:var(--sub);margin-bottom:6px;">歌曲存入浏览器数据库（IndexedDB，容量大，刷新/关机不丢），按列表顺序自动连播；可给每首配 .lrc 歌词同步飘字。</div>';
+    if(lib.length){
+      lib.forEach(s=>{
+        const isCur=__bgmLocal&&__bgmLocal.lib&&__bgmLocal.ids&&__bgmLocal.ids[__bgmLocal.i]===s.id&&bgmIsPlaying();
+        h+='<div class="list-item" style="'+(isCur?'background:var(--brand-light);':'')+'"><div class="li-head"><span class="t" style="font-size:12.5px;">'+(isCur?'🔊 ':'🎵 ')+esc(s.name)+'</span><span style="font-size:10px;color:var(--sub);flex:none;">'+(s.size/1048576).toFixed(1)+'MB'+(s.lrc?' · 歌词✓':'')+'</span></div><div style="display:flex;gap:8px;margin-top:4px;"><span class="pill" data-libplay="'+s.id+'" style="cursor:pointer;color:var(--brand);">▶ 播放</span><span class="pill" data-liblrc="'+s.id+'" style="cursor:pointer;">📝 歌词</span><span class="pill" data-libdel="'+s.id+'" style="cursor:pointer;color:#c0392b;">🗑 删除</span></div></div>';
+      });
+    }else h+='<div class="fv empty">曲库还是空的，点上面「上传歌曲」导入手机/电脑里的歌</div>';
     /* 区3 网易云外链 */
     h+='<div class="gtitle">☁️ 网易云音乐（官方外链播放器）</div>';
     h+='<div style="display:flex;gap:6px;margin-bottom:6px;"><input id="bgmNeId" class="inp" placeholder="歌单/歌曲 ID 或分享链接" value="'+esc(c.ne||'')+'" style="flex:1;min-width:0;"><button class="btn sm primary" id="bgmNeGo">加载</button></div>';
@@ -1763,39 +1805,42 @@ function openBgmPanel(){
     $('#bgmVol').oninput=e=>{const v=Number(e.target.value);bgmSet('vol',v);if(__bgmAudio)__bgmAudio.volume=v/100;e.target.nextElementSibling.textContent=v+'%';};
     document.querySelectorAll('[data-bgmtx]').forEach(el=>el.onclick=()=>{const k=el.dataset.bgmtx;bgmSet(k,!bgmGet(k,true));renderBgmBar();draw();});
     document.querySelectorAll('[data-bgmi]').forEach(el=>el.onclick=()=>{bgmSet('on',true);bgmPlay(Number(el.dataset.bgmi));toast('🎵 切换到：'+BGM_LIST[Number(el.dataset.bgmi)].n);draw();});
-    $('#bgmLocal').onclick=()=>{
-      const inp=document.createElement('input');inp.type='file';inp.accept='audio/*';
-      inp.onchange=()=>{
-        const f=inp.files[0];if(!f)return;
-        if(__bgmLocal&&__bgmLocal.url)try{URL.revokeObjectURL(__bgmLocal.url);}catch(e){}
-        __bgmLocal={url:URL.createObjectURL(f),name:f.name.replace(/\.[^.]+$/,''),lrc:__bgmLocal&&__bgmLocal.lrc||null};
-        bgmSet('on',true);
-        const a=bgmA();a.dataset.src='local';a.src=__bgmLocal.url;a.volume=(bgmGet('vol',40)||40)/100;
-        a.play().then(()=>{toast('🎵 播放：'+__bgmLocal.name);renderBgmBar();}).catch(()=>{toast('播放被拦截，再点一下页面');});
-        draw();
+    $('#bgmUp').onclick=()=>{
+      const inp=document.createElement('input');inp.type='file';inp.accept='audio/*';inp.multiple=true;
+      inp.onchange=async()=>{
+        const fs2=[...inp.files];if(!fs2.length)return;
+        if(!db){toast('浏览器数据库不可用，无法保存');return;}
+        for(const f of fs2){
+          await bgmDBPut(db,{id:'u'+Date.now()+Math.random().toString(36).slice(2,7),name:f.name.replace(/\.[^.]+$/,''),size:f.size,blob:f,lrc:''});
+        }
+        toast('✅ 已入库 '+fs2.length+' 首');draw();
       };
       inp.click();
     };
-    $('#bgmLrcBtn').onclick=()=>{
+    document.querySelectorAll('[data-libplay]').forEach(el=>el.onclick=()=>{bgmSet('on',true);bgmPlayLib(el.dataset.libplay);});
+    document.querySelectorAll('[data-liblrc]').forEach(el=>el.onclick=()=>{
       const inp=document.createElement('input');inp.type='file';inp.accept='.lrc,text/plain';
-      inp.onchange=()=>{
+      inp.onchange=async()=>{
         const f=inp.files[0];if(!f)return;
         const r=new FileReader();
-        r.onload=()=>{
-          const lrc=parseLrc(String(r.result));
-          if(__bgmLocal){__bgmLocal.lrc=lrc;toast('歌词已加载（'+lrc.length+' 行）');bgmLrcTick();}
-          else toast('先选歌曲文件再配歌词');
+        r.onload=async()=>{
+          const s=all?all.find(x=>x.id===el.dataset.liblrc):null;
+          if(!s)return;
+          s.lrc=String(r.result);
+          await bgmDBPut(db,s);
+          toast('歌词已保存到曲库');
+          if(__bgmLocal&&__bgmLocal.lib&&__bgmLocal.ids[__bgmLocal.i]===s.id){__bgmLocal.lrc=parseLrc(s.lrc);bgmLrcTick();}
           draw();
         };
         r.readAsText(f,'utf-8');
       };
       inp.click();
-    };
-    const lg=$('#bgmLocalGo');
-    if(lg)lg.onclick=()=>{
-      const a=bgmA();a.dataset.src='local';a.src=__bgmLocal.url;a.volume=(bgmGet('vol',40)||40)/100;
-      a.play().then(()=>{renderBgmBar();draw();}).catch(()=>toast('播放被拦截，再点一下页面'));
-    };
+    });
+    document.querySelectorAll('[data-libdel]').forEach(el=>el.onclick=async()=>{
+      await bgmDBDel(db,el.dataset.libdel);toast('已从曲库删除');draw();
+    });
+    const la=$('#bgmLibAll');
+    if(la)la.onclick=()=>{if(!lib.length)return;bgmSet('on',true);bgmPlayLib(lib[0].id);};
     $('#bgmNeGo').onclick=()=>{
       let v=$('#bgmNeId').value.trim();
       const m=v.match(/id=(\d+)/);
@@ -9317,7 +9362,7 @@ function openFullLook(){
   const renderLooks=save=>{
     let out='';
     save.looks.forEach((lk,i)=>{
-      out+='<div class="card" style="padding:12px;margin-bottom:10px;"><div style="display:flex;align-items:center;gap:8px;"><div style="font-weight:800;font-size:14px;">✨ '+esc(lk.name||('方案'+(i+1)))+'</div><button class="btn sm'+(window.__lookIdx===i?' primary':'')+'" data-looktry="'+i+'" style="margin-left:auto;flex:none;">🧍 去试穿</button></div>';
+      out+='<div class="card" style="padding:12px;margin-bottom:10px;"><div style="display:flex;align-items:center;gap:8px;"><div style="font-weight:800;font-size:14px;">✨ '+esc(lk.name||('方案'+(i+1)))+'</div></div>';
       if(lk.tip)out+='<div style="font-size:11.5px;color:var(--sub);margin-top:4px;">💡 '+esc(lk.tip)+'</div>';
       out+='<div style="margin-top:8px;">';
       (lk.slots||[]).forEach(s=>{
@@ -9336,103 +9381,11 @@ function openFullLook(){
     return out;
   };
   const bindLookBtns=()=>{
-    document.querySelectorAll('[data-looktry]').forEach(el=>el.onclick=()=>{window.__lookIdx=Number(el.dataset.looktry);closeSheet();openStudio();});
+    document.querySelectorAll('[data-looktry]').forEach(el=>el.onclick=()=>{window.__lookIdx=Number(el.dataset.looktry);});
   };
   draw();
 }
 const WARD_CATS=['上装','下装','外套','鞋履','包袋','配饰'];
-/* —— 2D 虚拟试穿间：按身材档案渲染形象，点击部位弹出搭配详情/购买入口 —— */
-const COLOR_MAP={'白':'#f5f5f2','黑':'#2c2c2a','灰':'#9a9a96','红':'#c0392b','蓝':'#2e6db4','绿':'#3B6D11','黄':'#d9a520','粉':'#d98ca6','紫':'#7d5bb5','棕':'#8a6642','米':'#d8cfc0','卡其':'#b3a077','杏':'#e3c8a8','驼':'#b08d5e','牛仔':'#5a7d9a','橙':'#d87a30','青':'#3a9a9a','银':'#c9ccd1','金':'#c9a227','军绿':'#5a6b3a','藏青':'#2c3e5c'};
-function colorOf(text,dft){
-  const s=String(text||'');
-  for(const k in COLOR_MAP){if(s.indexOf(k)>=0)return COLOR_MAP[k];}
-  return dft||'#8ea3b0';
-}
-function skinOf(p){return {'偏白':'#f3dfd0','自然':'#ecc9ad','偏黄':'#e3bd96','小麦':'#d3a173','偏黑':'#b07e50'}[p.skin]||'#ecc9ad';}
-function openStudio(){
-  const p=bodyProfile();
-  const save=getGlobal('fullLook');
-  const look=(save&&save.looks&&(save.looks[window.__lookIdx||0]||save.looks[0]))||null;
-  const slotOf=n=>{if(!look)return null;const arr=(look.slots||[]).filter(s=>s.slot===n);return arr.length?arr[0]:null;};
-  const hW=p.height?Number(p.height):165;
-  const wF=Math.max(0.88,Math.min(1.35,(p.waist&&p.height)?Number(p.waist)/(Number(p.height)*0.43):1));
-  const sk=skinOf(p);
-  const topS=slotOf('上装'),hatS=slotOf('帽子'),botS=slotOf('下装'),shoeS=slotOf('鞋'),earS=slotOf('耳饰'),bagS=slotOf('包袋'),accS=slotOf('配饰'),hairS=slotOf('发型'),coatS=slotOf('外套');
-  const topC=colorOf(topS&&(topS.name||''),'#8ea3b0'),botC=colorOf(botS&&(botS.name||''),'#3a4552'),shoeC=colorOf(shoeS&&(shoeS.name||''),'#d8d8d4'),coatC=colorOf(coatS&&(coatS.name||''),'#b3a077'),hatC=colorOf(hatS&&(hatS.name||''),'#5f5e5a');
-  const isSkirt=botS&&/裙/.test(botS.name||'');
-  const headR=30*Math.pow(165/hW,0.35);
-  const cx=110;
-  let svg='<svg id="studioSvg" viewBox="0 0 220 560" width="100%" style="max-height:60vh;">';
-  svg+='<rect x="0" y="0" width="220" height="560" rx="16" fill="#f6f4ef"/>';
-  /* 身体 */
-  svg+='<g data-wslot="发型" style="cursor:pointer;">';
-  svg+='<circle cx="'+cx+'" cy="'+(70)+'" r="'+headR+'" fill="'+sk+'"/>';
-  svg+='<path d="M '+(cx-headR)+' '+(70)+' a '+headR+' '+headR+' 0 0 1 '+(headR*2)+' 0 l 0 '+(-headR*0.45)+' a '+headR+' '+headR+' 0 0 0 '+(-headR*2)+' 0 z" fill="#4a342a"/>';
-  svg+='<path d="M '+(cx-headR*0.95)+' '+(66)+' q '+(-headR*0.5)+' '+(70)+' '+(headR*0.35)+' '+(95)+' l '+(headR*0.5)+' 0 q '+(headR*0.3)+' '+(30)+' '+(headR*0.55)+' '+(-8)+' l 0 '+(-60)+' z" fill="#4a342a"/>';
-  svg+='</g>';
-  if(hatS){svg+='<g data-wslot="帽子" style="cursor:pointer;"><path d="M '+(cx-headR*1.02)+' '+(58)+' a '+(headR*1.02)+' '+(headR*0.9)+' 0 0 1 '+(headR*2.04)+' 0 z" fill="'+hatC+'"/><rect x="'+(cx-headR*1.25)+'" y="'+(54)+'" width="'+(headR*2.5)+'" height="6" rx="3" fill="'+hatC+'"/></g>';}
-  svg+='<rect x="'+(cx-9)+'" y="'+(70+headR-6)+'" width="18" height="26" fill="'+sk+'"/>';
-  if(earS){svg+='<g data-wslot="耳饰" style="cursor:pointer;"><circle cx="'+(cx-headR-3)+'" cy="'+(78)+'" r="3.5" fill="#c9a227"/><circle cx="'+(cx+headR+3)+'" cy="'+(78)+'" r="3.5" fill="#c9a227"/></g>';}
-  /* 躯干+上装 */
-  const shW=34*wF,waistW=26*wF,torTop=70+headR+20,torH=118;
-  svg+='<g data-wslot="上装" style="cursor:pointer;">';
-  svg+='<path d="M '+(cx-shW)+' '+torTop+' L '+(cx+shW)+' '+torTop+' L '+(cx+waistW)+' '+(torTop+torH)+' L '+(cx-waistW)+' '+(torTop+torH)+' z" fill="'+topC+'"/>';
-  svg+='<path d="M '+(cx-8)+' '+torTop+' l 8 14 l 8 -14 z" fill="rgba(0,0,0,.14)"/>';
-  svg+='</g>';
-  /* 手臂（肤色） */
-  svg+='<rect x="'+(cx-shW-13*wF)+'" y="'+(torTop+4)+'" width="'+(11*wF)+'" height="'+(96)+'" rx="6" fill="'+sk+'"/>';
-  svg+='<rect x="'+(cx+shW+2*wF)+'" y="'+(torTop+4)+'" width="'+(11*wF)+'" height="'+(96)+'" rx="6" fill="'+sk+'"/>';
-  /* 外套：两侧翻开 */
-  if(coatS){svg+='<g data-wslot="外套" style="cursor:pointer;"><path d="M '+(cx-shW-4)+' '+(torTop-2)+' L '+(cx-shW-14*wF)+' '+(torTop+torH+6)+' L '+(cx-shW+6)+' '+(torTop+torH+6)+' L '+(cx-shW+8)+' '+(torTop+30)+' z" fill="'+coatC+'"/><path d="M '+(cx+shW+4)+' '+(torTop-2)+' L '+(cx+shW+14*wF)+' '+(torTop+torH+6)+' L '+(cx+shW-6)+' '+(torTop+torH+6)+' L '+(cx+shW-8)+' '+(torTop+30)+' z" fill="'+coatC+'"/></g>';}
-  /* 配饰（项链/腕表） */
-  if(accS){svg+='<g data-wslot="配饰" style="cursor:pointer;"><path d="M '+(cx-13)+' '+(torTop+6)+' q 13 16 26 0" fill="none" stroke="#c9a227" stroke-width="2"/><circle cx="'+cx+'" cy="'+(torTop+21)+'" r="3" fill="#c9a227"/></g>';}
-  const hipY=torTop+torH;
-  if(isSkirt){svg+='<g data-wslot="下装" style="cursor:pointer;"><path d="M '+(cx-waistW)+' '+hipY+' L '+(cx+waistW)+' '+hipY+' L '+(cx+40*wF)+' '+(hipY+86)+' L '+(cx-40*wF)+' '+(hipY+86)+' z" fill="'+botC+'"/></g>';
-    svg+='<rect x="'+(cx-11*wF)+'" y="'+(hipY+86)+'" width="'+(9*wF)+'" height="34" fill="'+sk+'"/>';
-    svg+='<rect x="'+(cx+2*wF)+'" y="'+(hipY+86)+'" width="'+(9*wF)+'" height="34" fill="'+sk+'"/>';
-  }else{
-    svg+='<g data-wslot="下装" style="cursor:pointer;">';
-    svg+='<path d="M '+(cx-waistW)+' '+hipY+' L '+(cx+waistW)+' '+hipY+' L '+(cx+waistW-3)+' '+(hipY+120)+' L '+(cx+5)+' '+(hipY+120)+' L '+cx+' '+(hipY+40)+' L '+(cx-5)+' '+(hipY+120)+' L '+(cx-waistW+3)+' '+(hipY+120)+' z" fill="'+botC+'"/>';
-    svg+='</g>';
-  }
-  const legY=isSkirt?hipY+120:hipY+120;
-  /* 鞋 */
-  svg+='<g data-wslot="鞋" style="cursor:pointer;"><ellipse cx="'+(cx-11*wF)+'" cy="'+(legY+38)+'" rx="'+(13*wF)+'" ry="7" fill="'+shoeC+'"/><ellipse cx="'+(cx+11*wF)+'" cy="'+(legY+38)+'" rx="'+(13*wF)+'" ry="7" fill="'+shoeC+'"/></g>';
-  /* 包 */
-  if(bagS){const bagC=colorOf(bagS.name||'','#8a6642');svg+='<g data-wslot="包袋" style="cursor:pointer;"><rect x="'+(cx+shW+14*wF)+'" y="'+(torTop+66)+'" width="22" height="26" rx="5" fill="'+bagC+'"/><path d="M '+(cx+shW+16*wF)+' '+(torTop+66)+' q 9 -14 18 0" fill="none" stroke="'+bagC+'" stroke-width="2.5"/></g>';}
-  svg+='</svg>';
-  const parts=LOOK_SLOTS.slice();
-  let h='<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">';
-  h+='<span class="pill">'+(p.height?p.height+'cm · '+(p.weight||'?')+'kg':'⚠️ 身材未填')+'</span>'+(look?'<span class="pill">'+esc(look.name||'方案')+'</span>':'')+'<button class="btn ghost sm" id="stBody" style="margin-left:auto;flex:none;">🧍 编辑身材</button></div>';
-  if(!look)h+='<div class="card" style="background:var(--brand-light);"><div style="font-size:12.5px;line-height:1.8;">还没有搭配方案。先「✨ 生成全套搭配」，形象就会穿上那套衣服；也可以直接点形象上的部位看建议。</div></div>';
-  h+='<div id="stSvgWrap">'+svg+'</div>';
-  h+='<div style="font-size:11px;color:var(--sub);text-align:center;margin:4px 0 8px;">👆 点击形象上的部位（帽子/头发/耳饰/上衣/外套/下装/鞋/包）看详情</div>';
-  h+='<div class="card" style="padding:10px;"><div style="font-size:11.5px;color:var(--sub);">形象按你的身材比例渲染（腰围/身高驱动体型），肤色随档案同步；属示意形象，非真人照片。</div></div>';
-  openSheet('🧍 虚拟试穿间',h);
-  $('#stBody').onclick=()=>{closeSheet();openBodyProfile(()=>openStudio());};
-  document.querySelectorAll('#studioSvg [data-wslot]').forEach(el=>el.onclick=()=>openWSlot(el.dataset.wslot));
-}
-function openWSlot(slot){
-  const save=getGlobal('fullLook');
-  const look=(save&&save.looks&&(save.looks[window.__lookIdx||0]||save.looks[0]))||null;
-  let h='<div class="gtitle">👀 '+esc(slot)+'</div>';
-  const s=look&&(look.slots||[]).find(x=>x.slot===slot);
-  if(s){
-    if(s.use==='have'){
-      h+='<div class="card"><div class="card-title">✅ 衣橱已有</div><div style="font-size:14px;font-weight:800;">'+esc(s.name||'')+'</div></div>';
-      const it=(getGlobal('wardrobe').items||[]).find(x=>(x.name||'')===s.name||(x.cat||'')===s.name);
-      if(it&&it.src)h+='<div style="text-align:center;"><img src="'+it.src+'" style="max-width:200px;max-height:200px;border-radius:12px;"></div>';
-    }else{
-      h+='<div class="card"><div class="card-title">🛍 推荐购买</div><div style="font-size:14px;font-weight:800;">'+esc(s.name||'')+'</div>'+(s.budget?'<div style="font-size:12px;color:var(--sub);margin-top:3px;">💰 参考价位：'+esc(s.budget)+'</div>':'')+(s.why?'<div style="font-size:12px;line-height:1.8;margin-top:6px;">💬 '+esc(s.why)+'</div>':'')+(s.kw?shopLinks(s.kw):'')+'</div>';
-      h+='<div class="card" style="background:var(--brand-light);"><div style="font-size:11px;line-height:1.7;color:var(--sub);">链接直达平台搜索结果页（关键词已按推荐优化）。纯前端应用拿不到实时商品价格与店铺数据，下单前用「📖 选购指南」的吊牌标准核对材质与安全类别。</div></div>';
-    }
-  }else{
-    h+='<div class="fv empty">这套搭配没有覆盖「'+esc(slot)+'」。去「✨ 生成全套搭配」让它覆盖全部部位。</div><button class="btn primary" id="wsgGo" style="width:100%;margin-top:8px;">✨ 生成全套搭配</button>';
-  }
-  openSheet('👀 '+slot,h);
-  const go=$('#wsgGo');
-  if(go)go.onclick=()=>{closeSheet();openFullLook();};
-}
 /* 胶囊衣橱：从现有单品自动组合搭配 */
 let LAST_CAPS=[];
 function capsuleSuggestions(g){
@@ -9480,7 +9433,7 @@ function renderWardrobe(){
   if(!g.layout)g.layout='grid';
   let h='<div class="card"><div class="card-title">👗 衣橱 · 我的单品</div><div class="card-sub">仿「尽简衣橱」多级分类管理</div>';
   h+='<div class="upload-row"><button class="btn primary" data-act="addcloth">＋ 添加单品</button><button class="btn" data-act="cutcloth">✂️ 抠图添加</button><button class="btn" data-act="aioutfit">🤖 AI 穿搭推荐</button></div>';
-  h+='<div class="upload-row"><button class="btn" data-wact="buyguide">📖 选购指南</button><button class="btn" data-wact="fulllook">✨ 全套搭配</button><button class="btn" data-wact="studio">🧍 虚拟试穿</button><button class="btn" data-wact="body">🧍‍♀️ 身材档案</button></div>';
+  h+='<div class="upload-row"><button class="btn" data-wact="buyguide">📖 选购指南</button><button class="btn" data-wact="fulllook">✨ 全套搭配</button><button class="btn" data-wact="body">🧍‍♀️ 身材档案</button></div>';
   h+='<div class="card" data-wact="buyguide" style="cursor:pointer;background:linear-gradient(135deg,#fdeef0,#fbeeee);border:1px solid #f0c8ce;"><div style="display:flex;align-items:center;gap:8px;"><div style="font-size:24px;">🛍</div><div style="flex:1;min-width:0;"><div style="font-weight:800;font-size:13px;">推荐购买指南</div><div style="font-size:10.5px;color:var(--sub);margin-top:2px;">面料材质 · 吊牌执行标准 · 避雷清单 · 全套搭配与购买直达</div></div><div style="color:var(--sub);font-size:18px;">›</div></div></div>';
   h+=topActions('wardrobe',false,'');
   h+='<div class="ly-row"><span class="lbl">单品排版</span>'+layoutSwitchHTML('wardrobe',g.layout,[
@@ -11919,7 +11872,6 @@ function bindWardrobe(){
     const a=el.dataset.wact;
     if(a==='buyguide')openBuyGuide('');
     else if(a==='fulllook')openFullLook();
-    else if(a==='studio')openStudio();
     else if(a==='body')openBodyProfile();
   });
   c.querySelectorAll('[data-cat]').forEach(el=>el.onclick=()=>{
