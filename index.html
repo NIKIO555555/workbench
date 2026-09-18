@@ -1564,7 +1564,8 @@ function openSettings(){
     $$('#sheetBody [data-voicechar]').forEach(x=>{x.style.border='1px solid var(--line)';x.style.background='';});
     saveSettings();hl();
     stopSpeak();
-    edgeSpeak((ch.sm||{})['zh-CN']||'','zh-CN').then(ok=>{if(!ok)toast('神经网络音色连接失败，朗读将自动回落系统音色');});
+    toast('已启用「'+ch.name+'」音色');
+    edgeSpeak((ch.sm||{})['zh-CN']||'','zh-CN',id).then(ok=>{if(!ok){if(!personaSystemSample(id,'zh-CN'))toast('音色引擎暂不可用，朗读将用系统声音近似');}});
   });
   $$('#sheetBody [data-ladsaud]').forEach(el=>el.onclick=(ev)=>{
     ev.stopPropagation();
@@ -1572,7 +1573,10 @@ function openSettings(){
     const ch=LADS_CHARS[parts[0]];if(!ch)return;
     const lg=parts[1]==='zh'?'zh-CN':(parts[1]==='ja'?'ja-JP':'en-US');
     stopSpeak();
-    edgeSpeak((ch.sm||{})[lg]||(lg==='ja-JP'?'やあ。':'Hello.'),lg).then(ok=>{if(!ok)toast('连接失败，请稍后再试');});
+    /* 显式传角色 id：试听不受全局选中状态影响；Edge 失败自动用系统声音按角色音调模拟 */
+    edgeSpeak((ch.sm||{})[lg]||(lg==='ja-JP'?'やあ。':'Hello.'),lg,parts[0]).then(ok=>{
+      if(!ok){if(!personaSystemSample(parts[0],lg))toast('音色试听失败：请检查网络后重试');}
+    });
   });
   /* 语音角色选择（豆包风格） */
   $$('#sheetBody [data-voicechar]').forEach(el=>el.onclick=()=>{
@@ -1685,8 +1689,7 @@ function pickVoice(lang){
    （云希=清亮少年 / 云扬=沉稳播音 / 云健=成熟磁性）+ 音调语速塑形，
    为四位男主各配中/英/日一套音色。需联网，失败自动回落系统音色链路。 */
 const EDGE_TTS_TOKEN='6A5AA1D4EAFF4E9FB37E23D68491D6F4';
-let __edgeAudio=null;
-function edgeStop(){try{if(__edgeAudio){__edgeAudio.pause();__edgeAudio.src='';__edgeAudio=null;}}catch(e){}}
+function edgeStop(){try{if(window.__edgeAudioEl)window.__edgeAudioEl.pause();}catch(e){}}
 function _hex32(){let s='';for(let i=0;i<16;i++)s+=Math.floor(Math.random()*256).toString(16).padStart(2,'0');return s;}
 async function _edgeGec(){
   const WIN_EPOCH=11644473600;
@@ -1697,62 +1700,96 @@ async function _edgeGec(){
   let s='';new Uint8Array(h).forEach(function(b){s+=b.toString(16).padStart(2,'0');});
   return s.toUpperCase();
 }
+function _edgeWs(url,text,voice,lang,opts){
+  opts=opts||{};
+  return new Promise(function(resolve,reject){
+    if(!('WebSocket' in window)){reject(new Error('无 WebSocket'));return;}
+    let ws;
+    try{
+      ws=new WebSocket(url);
+    }catch(e){reject(e);return;}
+    let settled=false;const chunks=[];
+    const done=(ok,val)=>{if(settled)return;settled=true;clearTimeout(to);try{ws.close();}catch(e2){}(ok?resolve:reject)(val);};
+    const to=setTimeout(function(){done(false,new Error('edge超时'));},9000);
+    ws.binaryType='arraybuffer';
+    ws.onopen=function(){
+      const ts=new Date().toUTCString();
+      try{
+        ws.send('X-Timestamp:'+ts+'\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}');
+        const esc=String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        const pp=(opts.pitchPct>=0?'+':'')+Math.round(opts.pitchPct||0)+'%';
+        const rr=(opts.ratePct>=0?'+':'')+Math.round(opts.ratePct||0)+'%';
+        const ssml="<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='"+lang+"'><voice name='"+voice+"'><prosody pitch='"+pp+"' rate='"+rr+"' volume='+0%'>"+esc+"</prosody></voice></speak>";
+        ws.send('X-RequestId:'+_hex32()+'\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:'+ts+'\r\nPath:ssml\r\n\r\n'+ssml);
+      }catch(e){done(false,e);}
+    };
+    ws.onmessage=function(ev){
+      if(typeof ev.data==='string'){
+        if(ev.data.indexOf('Path:turn.end')>=0){
+          if(chunks.length)done(true,new Blob(chunks,{type:'audio/mpeg'}));
+          else done(false,new Error('edge无音频'));
+        }
+      }else{
+        try{
+          const dv=new DataView(ev.data);
+          const hl=dv.getUint16(0);
+          chunks.push(ev.data.slice(2+hl));
+        }catch(e){}
+      }
+    };
+    ws.onerror=function(){done(false,new Error('edge连接失败'));};
+    ws.onclose=function(){if(!settled){if(chunks.length)done(true,new Blob(chunks,{type:'audio/mpeg'}));else done(false,new Error('edge连接关闭'));}};
+  });
+}
 function edgeTts(text,voice,lang,opts){
   opts=opts||{};
   return _edgeGec().then(function(gec){
-    return new Promise(function(resolve,reject){
-      if(!('WebSocket' in window)){reject(new Error('无 WebSocket'));return;}
-      let ws;
-      try{
-        ws=new WebSocket('wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken='+EDGE_TTS_TOKEN+'&Sec-MS-GEC='+gec+'&Sec-MS-GEC-Version=1-130.0.2849.68&ConnectionId='+_hex32());
-      }catch(e){reject(e);return;}
-      let settled=false;const chunks=[];
-      const done=(ok,val)=>{if(settled)return;settled=true;clearTimeout(to);try{ws.close();}catch(e2){}(ok?resolve:reject)(val);};
-      const to=setTimeout(function(){done(false,new Error('edge超时'));},9000);
-      ws.binaryType='arraybuffer';
-      ws.onopen=function(){
-        const ts=new Date().toUTCString();
-        try{
-          ws.send('X-Timestamp:'+ts+'\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}');
-          const esc=String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-          const pp=(opts.pitchPct>=0?'+':'')+Math.round(opts.pitchPct||0)+'%';
-          const rr=(opts.ratePct>=0?'+':'')+Math.round(opts.ratePct||0)+'%';
-          const ssml="<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='"+lang+"'><voice name='"+voice+"'><prosody pitch='"+pp+"' rate='"+rr+"' volume='+0%'>"+esc+"</prosody></voice></speak>";
-          ws.send('X-RequestId:'+_hex32()+'\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:'+ts+'\r\nPath:ssml\r\n\r\n'+ssml);
-        }catch(e){done(false,e);}
-      };
-      ws.onmessage=function(ev){
-        if(typeof ev.data==='string'){
-          if(ev.data.indexOf('Path:turn.end')>=0){
-            if(chunks.length)done(true,new Blob(chunks,{type:'audio/mpeg'}));
-            else done(false,new Error('edge无音频'));
-          }
-        }else{
-          try{
-            const dv=new DataView(ev.data);
-            const hl=dv.getUint16(0);
-            chunks.push(ev.data.slice(2+hl));
-          }catch(e){}
-        }
-      };
-      ws.onerror=function(){done(false,new Error('edge连接失败'));};
-      ws.onclose=function(){if(!settled){if(chunks.length)done(true,new Blob(chunks,{type:'audio/mpeg'}));else done(false,new Error('edge连接关闭'));}};
-    });
+    const qs='TrustedClientToken='+EDGE_TTS_TOKEN+'&Sec-MS-GEC='+gec+'&Sec-MS-GEC-Version=1-130.0.2849.68&ConnectionId='+_hex32();
+    /* 双端点：主端点失败自动换备用端点（提升国内/受限网络可用性） */
+    const urls=[
+      'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?'+qs,
+      'wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1?'+qs
+    ];
+    let i=0;
+    const attempt=function(){
+      if(i>=urls.length)return Promise.reject(new Error('edge端点全部失败'));
+      return _edgeWs(urls[i++],text,voice,lang,opts).catch(attempt);
+    };
+    return attempt();
   });
 }
-function edgeSpeak(text,lang){
-  const p=ladsPersonaFor(lang);
+function edgeSpeak(text,lang,pid){
+  const p=ladsPersonaFor(lang,pid);
   if(!p||!text)return Promise.resolve(false);
   return edgeTts(text,p.voice,p.lang,{pitchPct:p.pitchPct,ratePct:p.ratePct}).then(function(blob){
     return new Promise(function(res){
-      edgeStop();
-      const a=new Audio(URL.createObjectURL(blob));
-      __edgeAudio=a;
-      a.onended=function(){try{URL.revokeObjectURL(a.src);}catch(e){}res(true);};
-      a.onerror=function(){res(false);};
-      a.play().catch(function(){res(false);});
+      try{
+        /* 复用全局已解锁的音频元素：play() 在异步回调里执行时，只有解锁过的元素才被移动端放行 */
+        if(!window.__edgeAudioEl)window.__edgeAudioEl=new Audio();
+        const a=window.__edgeAudioEl;
+        if(window.__edgeURL){try{URL.revokeObjectURL(window.__edgeURL);}catch(e){}}
+        window.__edgeURL=URL.createObjectURL(blob);
+        a.onended=function(){res(true);};
+        a.onerror=function(){res(false);};
+        a.src=window.__edgeURL;
+        const pr=a.play();
+        if(pr&&pr.catch)pr.catch(function(){res(false);});
+      }catch(e){res(false);}
     });
   }).catch(function(){return false;});
+}
+/* 系统音色模拟角色（Edge 不可用时的保底：按角色音调/语速塑形，保证点了必有声） */
+function personaSystemSample(pid,lang){
+  const ch=LADS_CHARS[pid];if(!ch)return false;
+  try{
+    if(!('speechSynthesis' in window))return false;
+    const u=new SpeechSynthesisUtterance((ch.sm||{})[lang]||ch.name);
+    u.lang=lang;u.rate=ch.sRate||1;u.pitch=ch.sPitch||1;u.volume=1;
+    const v=pickVoice(lang);if(v)u.voice=v;
+    window.speechSynthesis.cancel();window.speechSynthesis.resume();
+    window.speechSynthesis.speak(u);
+    return true;
+  }catch(e){return false;}
 }
 const LADS_CHARS={
   xavier:{icon:'🌟',name:'沈星回',desc:'清冷少年音',zh:'zh-CN-YunxiNeural',en:'en-US-EricNeural',ja:'ja-JP-KeitaNeural',pitchPct:4,ratePct:2,sRate:1.05,sPitch:1.15,
@@ -1765,8 +1802,8 @@ const LADS_CHARS={
     sm:{'zh-CN':'跟在我身后，别乱跑。','en-US':"Stay close. Don't fall behind.",'ja-JP':'俺の後ろにいろ。'}}
 };
 const LADS_ORDER=['xavier','zayne','rafayel','sylus'];
-function ladsPersonaFor(lang){
-  const ch=LADS_CHARS[SETTINGS.voiceLads];if(!ch)return null;
+function ladsPersonaFor(lang,pid){
+  const ch=LADS_CHARS[pid||SETTINGS.voiceLads];if(!ch)return null;
   const l=String(lang||'zh-CN').toLowerCase();
   let v,smLang;
   if(l.indexOf('zh')===0){v=ch.zh;smLang='zh-CN';}
@@ -1955,6 +1992,12 @@ function unlockAudio(){
     }
   }catch(e){}
   try{if(window.speechSynthesis&&window.speechSynthesis.paused)window.speechSynthesis.resume();}catch(e){}
+  /* 解锁共享音频元素（Edge 音色合成在异步回调里 play，需元素先在手势内解锁过一次） */
+  try{
+    if(!window.__edgeAudioEl)window.__edgeAudioEl=new Audio();
+    window.__edgeAudioEl.src='data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+    const _ep=window.__edgeAudioEl.play();if(_ep&&_ep.catch)_ep.catch(function(){});
+  }catch(e){}
   warmVoice();
   try{bgmBoot();}catch(e){}
 }
