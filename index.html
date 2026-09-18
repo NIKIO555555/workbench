@@ -819,6 +819,7 @@
   <div class="topbar">
     <button class="hamb" id="hamb">☰</button>
     <div class="tb-title"><span class="tb-ico" id="tbIcon">🏠</span><span id="tbTitle">我的工作台</span></div>
+    <button id="bgmBtn" title="背景音乐" style="background:none;border:none;font-size:17px;cursor:pointer;padding:4px 6px;flex:none;">🔈</button>
     <div class="theme-switcher">
       <div class="theme-current" id="themeCur"><span>🌸</span><span>美乐蒂</span><span>▾</span></div>
       <div class="theme-menu" id="themeMenu"></div>
@@ -828,6 +829,7 @@
 </div>
 <nav class="bottombar" id="bottombar"></nav>
 <button id="notesFab" title="便签标注">📝<span class="nb" id="notesCount" style="display:none;">0</span></button>
+<div id="bgmBar" style="display:none;position:fixed;top:0;left:0;right:0;height:30px;z-index:9990;pointer-events:none;"><canvas id="bgmFx" style="width:100%;height:100%;display:block;"></canvas><div id="bgmLyric" style="position:absolute;left:0;right:0;top:7px;text-align:center;font-size:11px;font-weight:700;color:#5f5e5a;background:rgba(255,255,255,.55);width:max-content;max-width:86%;margin:0 auto;padding:1px 10px;border-radius:9px;backdrop-filter:blur(4px);"></div></div>
 
 <div class="mask" id="mask"></div>
 <div class="sheet" id="sheet">
@@ -1615,6 +1617,7 @@ function unlockAudio(){
   }catch(e){}
   try{if(window.speechSynthesis&&window.speechSynthesis.paused)window.speechSynthesis.resume();}catch(e){}
   warmVoice();
+  try{bgmBoot();}catch(e){}
 }
 function ensureAudioCtx(){
   const Ctx=window.AudioContext||window.webkitAudioContext;
@@ -1622,6 +1625,188 @@ function ensureAudioCtx(){
   if(!window.__wbActx||window.__wbActx.state==='closed'){try{window.__wbActx=new Ctx();}catch(e){return null;}}
   if(window.__wbActx.state==='suspended'){try{window.__wbActx.resume().catch(function(){});}catch(e){}}
   return window.__wbActx;
+}
+/* ===== 背景音乐 BGM：内置免版权歌单 + 本地导入 + 网易云官方外链 ===== */
+const BGM_LIST=[
+  {n:'Carefree（轻快）',a:'Kevin MacLeod · CC BY',src:'music/carefree.mp3'},
+  {n:'Thinking Music（钢琴）',a:'Kevin MacLeod · CC BY',src:'music/thinking.mp3'},
+  {n:'Deliberate Thought（钢琴）',a:'Kevin MacLeod · CC BY',src:'music/deliberate.mp3'},
+  {n:'Wallpaper（轻电子）',a:'Kevin MacLeod · CC BY',src:'music/wallpaper.mp3'}
+];
+let __bgmAudio=null,__bgmFxRAF=null,__bgmSpawner=null,__bgmLocal=null;
+function bgmGet(k,dft){const c=getGlobal('bgmConf')||{};return c[k]===undefined?dft:c[k];}
+function bgmSet(k,v){const c=getGlobal('bgmConf')||{};c[k]=v;setGlobal('bgmConf',c);}
+function bgmA(){
+  if(!__bgmAudio){
+    __bgmAudio=new Audio();
+    __bgmAudio.addEventListener('ended',()=>{if(bgmGet('on',true)&&!__bgmLocal)bgmPlay(bgmGet('idx',0)+1);});
+    __bgmAudio.addEventListener('timeupdate',()=>bgmLrcTick());
+    __bgmAudio.addEventListener('playing',()=>{bgmSetIcon(true);bgmFxStart();});
+    __bgmAudio.addEventListener('pause',()=>{bgmSetIcon(false);bgmFxStop();});
+  }
+  return __bgmAudio;
+}
+function bgmPlay(idx){
+  idx=((idx%BGM_LIST.length)+BGM_LIST.length)%BGM_LIST.length;
+  bgmSet('idx',idx);__bgmLocal=null;
+  const a=bgmA();
+  const it=BGM_LIST[idx];
+  if(a.dataset.src!==it.src){a.dataset.src=it.src;a.src=it.src;}
+  a.volume=(bgmGet('vol',40)||40)/100;
+  const p=a.play();
+  if(p&&p.then)p.catch(()=>{toast('🎵 浏览器需要你先点一下页面才会出声');bgmSetIcon(false);});
+  renderBgmBar();
+}
+function bgmStop(){if(__bgmAudio)__bgmAudio.pause();bgmSetIcon(false);bgmFxStop();}
+function bgmToggle(){const on=!bgmGet('on',true);bgmSet('on',on);if(on){bgmPlay(bgmGet('idx',0));toast('🎵 背景音乐已开启');}else{bgmStop();toast('背景音乐已暂停');}}
+function bgmSetIcon(playing){const b=$('#bgmBtn');if(b)b.textContent=playing?'🔊':'🔈';}
+function bgmIsPlaying(){return __bgmAudio&&!__bgmAudio.paused;}
+function parseLrc(t){
+  const out=[];
+  (t||'').split(/\r?\n/).forEach(l=>{
+    const tags=l.match(/\[\d+:\d+(?:\.\d+)?\]/g);
+    const txt=l.replace(/\[[^\]]*\]/g,'').trim();
+    if(tags&&txt)tags.forEach(mm=>{const x=mm.match(/\[(\d+):(\d+(?:\.\d+)?)\]/);out.push({t:(+x[1])*60+(+x[2]),line:txt});});
+  });
+  return out.sort((a,b)=>a.t-b.t);
+}
+function bgmCurName(){
+  if(__bgmLocal)return __bgmLocal.name;
+  return (BGM_LIST[bgmGet('idx',0)||0]||{}).n||'';
+}
+function bgmLrcTick(){
+  const el=$('#bgmLyric');if(!el)return;
+  const a=__bgmAudio;if(!a)return;
+  let line='';
+  if(__bgmLocal&&__bgmLocal.lrc&&__bgmLocal.lrc.length){
+    const cur=a.currentTime;
+    for(let i=0;i<__bgmLocal.lrc.length;i++){if(__bgmLocal.lrc[i].t<=cur)line=__bgmLocal.lrc[i].line;else break;}
+  }
+  if(!line){
+    line='♪ '+bgmCurName();
+    if(!__bgmLocal)line+=' · '+((BGM_LIST[bgmGet('idx',0)||0]||{}).a||'');
+  }
+  if(el.dataset.last!==line){el.dataset.last=line;el.textContent=line;}
+}
+/* 音符飘动特效条 */
+function bgmFxStart(){
+  const bar=$('#bgmBar');if(!bar)return;
+  if(!bgmGet('fx',true)){$('#bgmLyric').style.display='block';return;}
+  bar.style.display='block';
+  const cv=$('#bgmFx');if(!cv)return;
+  const dpr=Math.min(2,window.devicePixelRatio||1);
+  const W=bar.clientWidth,H=bar.clientHeight;
+  cv.width=W*dpr;cv.height=H*dpr;
+  const ctx=cv.getContext('2d');ctx.scale(dpr,dpr);
+  const chars=['♪','♫','♩','♬'];
+  const parts=[];
+  if(window.__bgmSpawner)clearInterval(window.__bgmSpawner);
+  window.__bgmSpawner=setInterval(()=>{if(parts.length<14)parts.push({x:Math.random()*W,y:H+10,vy:0.3+Math.random()*0.5,vx:(Math.random()-0.5)*0.4,s:9+Math.random()*7,c:chars[Math.floor(Math.random()*chars.length)],al:0.25+Math.random()*0.35});},280);
+  const step=()=>{
+    ctx.clearRect(0,0,W,H);
+    for(let i=parts.length-1;i>=0;i--){
+      const p=parts[i];p.y-=p.vy;p.x+=p.vx;
+      if(p.y<-12){parts.splice(i,1);continue;}
+      ctx.globalAlpha=p.al*(p.y/H<0.3?p.y/(H*0.3):1);
+      ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--brand')||'#8aa';
+      ctx.font=p.s+'px serif';
+      ctx.fillText(p.c,p.x,p.y);
+    }
+    ctx.globalAlpha=1;
+    __bgmFxRAF=requestAnimationFrame(step);
+  };
+  cancelAnimationFrame(__bgmFxRAF);
+  __bgmFxRAF=requestAnimationFrame(step);
+  $('#bgmLyric').style.display='block';
+}
+function bgmFxStop(){
+  cancelAnimationFrame(__bgmFxRAF);__bgmFxRAF=null;
+  if(window.__bgmSpawner){clearInterval(window.__bgmSpawner);window.__bgmSpawner=null;}
+  const bar=$('#bgmBar');if(bar)bar.style.display='none';
+}
+function renderBgmBar(){
+  const bar=$('#bgmBar');if(!bar)return;
+  if(bgmIsPlaying()){if(bgmGet('fx',true))bgmFxStart();else{bar.style.display='block';$('#bgmLyric').style.display='block';}bgmLrcTick();}
+  else bgmFxStop();
+}
+function bgmBoot(){
+  if(window.__bgmBooted)return;window.__bgmBooted=true;
+  if(bgmGet('on',true))setTimeout(()=>{bgmPlay(bgmGet('idx',0));},200);
+}
+function openBgmPanel(){
+  const conf=()=>getGlobal('bgmConf')||{on:true,vol:40,fx:true,idx:0,ne:''};
+  const draw=()=>{
+    const c=conf();
+    let h='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">'+
+      '<div style="font-weight:800;font-size:13.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(bgmIsPlaying()?'🔊 正在播放：'+esc(bgmCurName()):'⏸ 未在播放')+'</div>'+
+      '<button class="btn sm primary" id="bgmPP">'+(bgmIsPlaying()?'⏸':'▶️')+'</button></div>';
+    h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;"><span style="font-size:12px;flex:none;">🔈 音量</span><input id="bgmVol" type="range" min="0" max="100" value="'+(c.vol||40)+'" style="flex:1;"><span style="font-size:11px;color:var(--sub);width:32px;text-align:right;">'+(c.vol||40)+'%</span></div>';
+    h+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">'+
+      '<span class="pill" data-bgmtx="fx" style="cursor:pointer;'+(c.fx?'background:var(--brand);color:#fff;':'')+'">✨ 音符特效 '+(c.fx?'开':'关')+'</span>'+
+      '<span class="pill" data-bgmtx="on" style="cursor:pointer;'+(c.on?'background:var(--brand);color:#fff;':'')+'">🚀 进入自动播放 '+(c.on?'开':'关')+'</span></div>';
+    /* 区1 内置歌单 */
+    h+='<div class="gtitle">🎵 内置歌单（免版权 · 随工作台加载）</div>';
+    h+=BGM_LIST.map((it,i)=>'<div class="list-item" data-bgmi="'+i+'" style="cursor:pointer;'+(!__bgmLocal&&bgmGet('idx',0)===i&&bgmIsPlaying()?'background:var(--brand-light);':'')+'"><div class="li-head"><span class="t">'+esc(it.n)+'</span><span style="font-size:10px;color:var(--sub);">'+esc(it.a)+'</span></div></div>').join('');
+    /* 区2 本地导入 */
+    h+='<div class="gtitle">📁 本地导入（手机/电脑里的歌）</div>';
+    h+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;"><button class="btn sm" id="bgmLocal">🎧 选歌曲文件</button><button class="btn sm" id="bgmLrcBtn">📝 配 .lrc 歌词</button>'+(__bgmLocal?'<span class="pill" style="background:var(--brand);color:#fff;">'+esc(__bgmLocal.name)+'</span>':'')+'</div>';
+    h+='<div style="font-size:10.5px;color:var(--sub);margin-bottom:4px;">先选歌曲，再选同名 .lrc 歌词文件即可同步歌词飘字；不配歌词则显示歌名。</div>';
+    if(__bgmLocal)h+='<button class="btn primary sm" id="bgmLocalGo" style="width:100%;margin-bottom:8px;">▶️ 播放本地歌曲</button>';
+    /* 区3 网易云外链 */
+    h+='<div class="gtitle">☁️ 网易云音乐（官方外链播放器）</div>';
+    h+='<div style="display:flex;gap:6px;margin-bottom:6px;"><input id="bgmNeId" class="inp" placeholder="歌单/歌曲 ID 或分享链接" value="'+esc(c.ne||'')+'" style="flex:1;min-width:0;"><button class="btn sm primary" id="bgmNeGo">加载</button></div>';
+    h+='<div style="font-size:10.5px;color:var(--sub);margin-bottom:6px;">网易云 App → 分享 → 复制链接，把其中 id=后面的数字粘进来。歌单链接形如 …/playlist?id=123456（歌单）或 …/song?id=65766（单曲）。此区为网易云官方播放器样式，无法接歌词动画。</div>';
+    if(c.ne){const parts=c.ne.split('|');h+='<iframe src="https://music.163.com/outchain/player?type='+(parts[1]==='song'?'2':'0')+'&id='+esc(parts[0])+'&auto=0&height=90" frameborder="no" border="0" marginwidth="0" marginheight="0" width="100%" height="110" style="border-radius:10px;"></iframe>';}
+    h+='<div style="font-size:10.5px;color:var(--sub);margin-top:10px;">※ 内置曲为 CC BY 授权（Kevin MacLeod/incompetech.com）。汽水音乐无任何对外通道，暂不支持。音量只影响工作台音乐，不会改动设备音量。</div>';
+    openSheet('🎵 背景音乐',h);
+    $('#bgmPP').onclick=()=>{bgmToggle();draw();};
+    $('#bgmVol').oninput=e=>{const v=Number(e.target.value);bgmSet('vol',v);if(__bgmAudio)__bgmAudio.volume=v/100;e.target.nextElementSibling.textContent=v+'%';};
+    document.querySelectorAll('[data-bgmtx]').forEach(el=>el.onclick=()=>{const k=el.dataset.bgmtx;bgmSet(k,!bgmGet(k,true));renderBgmBar();draw();});
+    document.querySelectorAll('[data-bgmi]').forEach(el=>el.onclick=()=>{bgmSet('on',true);bgmPlay(Number(el.dataset.bgmi));toast('🎵 切换到：'+BGM_LIST[Number(el.dataset.bgmi)].n);draw();});
+    $('#bgmLocal').onclick=()=>{
+      const inp=document.createElement('input');inp.type='file';inp.accept='audio/*';
+      inp.onchange=()=>{
+        const f=inp.files[0];if(!f)return;
+        if(__bgmLocal&&__bgmLocal.url)try{URL.revokeObjectURL(__bgmLocal.url);}catch(e){}
+        __bgmLocal={url:URL.createObjectURL(f),name:f.name.replace(/\.[^.]+$/,''),lrc:__bgmLocal&&__bgmLocal.lrc||null};
+        bgmSet('on',true);
+        const a=bgmA();a.dataset.src='local';a.src=__bgmLocal.url;a.volume=(bgmGet('vol',40)||40)/100;
+        a.play().then(()=>{toast('🎵 播放：'+__bgmLocal.name);renderBgmBar();}).catch(()=>{toast('播放被拦截，再点一下页面');});
+        draw();
+      };
+      inp.click();
+    };
+    $('#bgmLrcBtn').onclick=()=>{
+      const inp=document.createElement('input');inp.type='file';inp.accept='.lrc,text/plain';
+      inp.onchange=()=>{
+        const f=inp.files[0];if(!f)return;
+        const r=new FileReader();
+        r.onload=()=>{
+          const lrc=parseLrc(String(r.result));
+          if(__bgmLocal){__bgmLocal.lrc=lrc;toast('歌词已加载（'+lrc.length+' 行）');bgmLrcTick();}
+          else toast('先选歌曲文件再配歌词');
+          draw();
+        };
+        r.readAsText(f,'utf-8');
+      };
+      inp.click();
+    };
+    const lg=$('#bgmLocalGo');
+    if(lg)lg.onclick=()=>{
+      const a=bgmA();a.dataset.src='local';a.src=__bgmLocal.url;a.volume=(bgmGet('vol',40)||40)/100;
+      a.play().then(()=>{renderBgmBar();draw();}).catch(()=>toast('播放被拦截，再点一下页面'));
+    };
+    $('#bgmNeGo').onclick=()=>{
+      let v=$('#bgmNeId').value.trim();
+      const m=v.match(/id=(\d+)/);
+      if(m)v=m[1];
+      if(!/^\d+$/.test(v)){toast('请粘贴含 id=数字 的网易云链接或纯数字 ID');return;}
+      const m2=v.match(/song/);
+      bgmSet('ne',v+(v&&$('#bgmNeId').value.indexOf('song')>=0?'|song':'|playlist'));
+      toast('网易云播放器已加载');draw();
+    };
+  };
+  draw();
 }
 /* ===== 在线语音兜底（有道词典发音接口：无需 Key、不依赖系统 TTS，支持中/英） =====
    场景：国产安卓 ROM 未装/未启用 TTS 引擎 → speechSynthesis 有接口但无声（getVoices()=0）。
@@ -14237,6 +14422,8 @@ function init(){
     document.addEventListener('click',(e)=>{if(!e.target.closest('.theme-switcher'))$('#themeMenu').classList.remove('open');if(!e.target.closest('#actMenu'))$('#actMenu').classList.remove('open');});
     document.addEventListener('click',unlockAudio,{once:true});
     document.addEventListener('touchend',unlockAudio,{once:true,capture:true});
+    $('#bgmBtn').onclick=openBgmPanel;
+    bgmSetIcon(false);
     document.addEventListener('keydown',(e)=>{if(e.key==='Escape'){closeNav();closeSheet();const am=$('#actMenu');if(am)am.classList.remove('open');const tm=$('#themeMenu');if(tm)tm.classList.remove('open');}});
     document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&$('#reader')&&$('#reader').classList.contains('open')&&'wakeLock' in navigator&&!RD.wl){try{RD.wl=navigator.wakeLock.request('screen');}catch(e){RD.wl=null;}}}); // 切回前台时重新申请屏幕常亮
     navigate('home');
