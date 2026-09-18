@@ -1094,6 +1094,11 @@ async function mediaHydrate(){
     const raw=localStorage.getItem(KEY)||'';
     const ref=new Set();
     (raw.match(/idb:m[0-9a-z]+/g)||[]).forEach(t=>ref.add(t.slice(4)));
+    /* 草稿台 PDF/底稿令牌也存在 IndexedDB（wb_draftdb），主库扫描看不到 → 必须计入引用，否则 48h 后被误删 */
+    try{
+      const dstr=await dgDbGet('main');
+      ((dstr||'').match(/idb:m[0-9a-z]+/g)||[]).forEach(t=>ref.add(t.slice(4)));
+    }catch(e){}
     if(ref.size){
       const all=await mextAll();
       all.forEach(r=>{if(!ref.has(r.id)&&r.ts&&Date.now()-r.ts>48*3600000)mextDel(r.id);});
@@ -15080,8 +15085,10 @@ function openDocViewer(d){
       DRV.text=content;
       docPaginate();drvRender();
     }else if(['pdf'].includes(d.ext)){
-      $('#drvBody').innerHTML='<iframe src="'+content+'" style="width:100%;height:100%;border:none;" title="pdf"></iframe>';
-      $('#drvCtrl').innerHTML='<span class="pv-sp on">PDF 使用系统阅读器：缩放/翻页/双页视图在阅读器内切换</span>';
+      /* 关键修复：现代浏览器（Chrome 85+/iOS Safari）封禁 data:URL 的 PDF iframe（白屏）→ 改 pdf.js canvas 渲染+翻页 */
+      renderDocPdf(content);
+    }else if(['docx'].includes(d.ext)){
+      renderDocx(content);
     }else if(['jpg','jpeg','png','gif','webp'].includes(d.ext)){
       $('#drvBody').innerHTML='<img src="'+content+'" style="max-width:100%;max-height:100%;object-fit:contain;margin:auto;display:block;">';
       $('#drvCtrl').innerHTML='<span class="pv-sp on">双指捏合或点按查看大图</span>';
@@ -15091,6 +15098,67 @@ function openDocViewer(d){
       const dl=$('#drvDl');if(dl)dl.onclick=()=>downloadDataURL(content,d.name||('doc.'+d.ext));
     }
   }).catch(()=>{$('#drvBody').innerHTML='<div class="pg-empty">读取失败</div>';});
+}
+/* PDF 在线渲染（pdf.js，按页翻页，适合手机） */
+async function renderDocPdf(dataUrl){
+  const body=$('#drvBody');
+  try{
+    const lib=await loadPdfJs();
+    const buf=Uint8Array.from(atob(dataUrl.slice(dataUrl.indexOf(',')+1)),c=>c.charCodeAt(0));
+    const doc=await lib.getDocument({data:buf}).promise;
+    DRV.pdf={doc:doc,cur:0,num:doc.numPages};
+    body.innerHTML='<div style="height:100%;overflow:auto;-webkit-overflow-scrolling:touch;background:#3a3a40;"><canvas id="drvPdfC" style="width:100%;height:auto;display:block;margin:0 auto;"></canvas></div>';
+    $('#drvCtrl').innerHTML='<button class="pv-sp" id="drvPdfPrev">‹ 上一页</button><span class="pv-sp on" id="drvPdfNo">1 / '+doc.numPages+'</span><button class="pv-sp" id="drvPdfNext">下一页 ›</button><button class="pv-sp" id="drvPdfDl">⬇️</button>';
+    const draw=async(n)=>{
+      DRV.pdf.cur=Math.max(0,Math.min(n,doc.numPages-1));
+      const no=$('#drvPdfNo');if(no)no.textContent=(DRV.pdf.cur+1)+' / '+doc.numPages;
+      const page=await doc.getPage(DRV.pdf.cur+1);
+      const cv=$('#drvPdfC');if(!cv)return;
+      const wpx=(cv.parentElement.clientWidth||360);
+      const vp1=page.getViewport({scale:1});
+      const dpr=Math.min(2.5,window.devicePixelRatio||1);
+      const vp=page.getViewport({scale:(wpx/vp1.width)*dpr});
+      cv.width=vp.width;cv.height=vp.height;
+      await page.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise;
+      cv.parentElement.scrollTop=0;
+    };
+    $('#drvPdfPrev').onclick=()=>draw(DRV.pdf.cur-1);
+    $('#drvPdfNext').onclick=()=>draw(DRV.pdf.cur+1);
+    $('#drvPdfDl').onclick=()=>downloadDataURL(DRV.raw,(DRV.doc&&DRV.doc.name)||'doc.pdf');
+    await draw(0);
+  }catch(e){
+    body.innerHTML='<div class="pg-empty">📕 PDF 渲染失败（'+esc((e&&e.message)||'未知')+'）<br>首次使用需联网加载引擎；也可先下载打开</div>';
+    $('#drvCtrl').innerHTML='<button class="pv-sp" id="drvPdfDl2">⬇️ 下载文件</button>';
+    const dl=$('#drvPdfDl2');if(dl)dl.onclick=()=>downloadDataURL(dataUrl,(DRV.doc&&DRV.doc.name)||'doc.pdf');
+  }
+}
+/* DOCX 在线阅读（mammoth 解析为 HTML） */
+let __mammothP=null;
+function loadMammoth(){
+  if(window.mammoth)return Promise.resolve(window.mammoth);
+  if(__mammothP)return __mammothP;
+  __mammothP=new Promise((res,rej)=>{
+    const s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js';
+    s.onload=()=>{window.mammoth?res(window.mammoth):(__mammothP=null,rej(new Error('引擎异常')));};
+    s.onerror=()=>{__mammothP=null;rej(new Error('网络不可用，无法加载 DOCX 引擎'));};
+    document.head.appendChild(s);
+  });
+  return __mammothP;
+}
+async function renderDocx(dataUrl){
+  const body=$('#drvBody');
+  try{
+    const mammoth=await loadMammoth();
+    const buf=Uint8Array.from(atob(dataUrl.slice(dataUrl.indexOf(',')+1)),c=>c.charCodeAt(0));
+    const r=await mammoth.convertToHtml({arrayBuffer:buf.buffer});
+    body.innerHTML='<div style="background:#fff;color:#222;min-height:100%;padding:16px 14px;font-size:15px;line-height:1.85;overflow:auto;height:100%;word-break:break-word;">'+(r.value||'<div class="pg-empty">空文档</div>')+'</div>';
+    $('#drvCtrl').innerHTML='<span class="pv-sp on">📘 DOCX 已解析 · 上下滑动阅读</span>';
+  }catch(e){
+    body.innerHTML='<div class="pg-empty">📘 DOCX 解析失败（首次使用需联网加载引擎），可先下载打开</div>';
+    $('#drvCtrl').innerHTML='<button class="pv-sp" id="drvDlX">⬇️ 下载文件</button>';
+    const dl=$('#drvDlX');if(dl)dl.onclick=()=>downloadDataURL(dataUrl,(DRV.doc&&DRV.doc.name)||'doc.docx');
+  }
 }
 function ensureDrvDom(){
   if($('#drv'))return;
