@@ -4921,7 +4921,7 @@ function renderAvatarCard(){
   return '<div class="card" style="background:linear-gradient(135deg,var(--brand-light),var(--card));">'+
     '<div style="display:flex;align-items:center;gap:12px;">'+
     '<div data-act="avatarCustom" style="cursor:pointer;flex-shrink:0;">'+avatarFace(p)+'</div>'+
-    '<div style="flex:1;"><div style="font-weight:800;font-size:15px;">'+esc(p.name)+' <span style="font-size:11px;color:var(--sub);font-weight:400;">你的分身 · 点形象可换装</span></div>'+
+    '<div style="flex:1;"><div style="font-weight:800;font-size:15px;">'+esc(p.name)+' <span style="font-size:11px;color:var(--sub);font-weight:400;">你的头像分身 · 点头像可更换样式</span></div>'+
     '<div style="font-size:12px;color:var(--sub);margin-top:3px;">'+esc(avatarOneLiner())+'</div></div></div>'+
     '<div style="display:flex;gap:8px;margin-top:10px;">'+
     '<button class="btn primary sm" data-act="avatarChat" style="flex:1;">💬 和我聊聊</button>'+
@@ -5316,19 +5316,15 @@ function openSheetDetail(sid){
   }
   if(s.note)html+='<div class="card" style="margin-bottom:10px;"><div class="card-title">练习建议</div><div class="fv" style="line-height:1.8;">'+esc(s.note)+'</div></div>';
   html+='<div class="card" style="margin-bottom:10px;"><div class="card-title">🔗 查找乐谱 / 图片谱</div>';
-  html+='<div class="btn-row" style="margin-bottom:8px;"><button class="btn" id="sheetMus" style="flex:1;">🎼 MuseScore</button><button class="btn" id="sheet8n" style="flex:1;">📄 8notes</button></div>';
-  html+='<div class="btn-row" style="margin-bottom:8px;"><button class="btn" id="sheetImgBaidu" style="flex:1;">🖼 百度图片搜谱</button><button class="btn" id="sheetImgGoogle" style="flex:1;">🖼 Google图片搜谱</button></div>';
   html+='<div class="btn-row" style="margin-bottom:8px;"><button class="btn" id="sheetBili" style="flex:1;">📺 B站教学视频</button><button class="btn" id="sheetWeb" style="flex:1;">🌐 全网搜谱</button></div>';
-  html+='<div class="fv" style="font-size:11px;color:var(--sub);line-height:1.6;">提示：百度/Google 图片搜谱可直接看到网友分享的曲谱图片；MuseScore/8notes 提供正版电子版。若搜不到，说明该曲未公开分享或存在版权限制。</div></div>';
+  html+='<div class="btn-row" style="margin-bottom:8px;"><button class="btn" id="sheetImgBaidu" style="flex:1;">🖼 百度图片搜谱</button></div>';
+  html+='<div class="fv" style="font-size:11px;color:var(--sub);line-height:1.6;">提示：百度图片搜谱可直接看到网友分享的曲谱图片；B站有大量教学视频。若搜不到，说明该曲未公开分享或存在版权限制。</div></div>';
   html+='<button class="btn primary" id="sheetMetro" style="width:100%;margin-bottom:8px;">🎵 用节拍器练这首（'+s.bpm+' BPM）</button>';
   openSheet('乐谱：'+s.t,html);
   const bm=$('#sheetMetro');if(bm)bm.onclick=function(){window.__metroBpm=s.bpm;window.__metroBeats=4;window.__instTab='metro';closeSheet();render();};
   const bb=$('#sheetBili');if(bb)bb.onclick=function(){window.open('https://search.bilibili.com/all?keyword='+encodeURIComponent(s.t+' '+INSTRUMENT_META[cur.leaf].label+' 教学'),'_blank');};
   const bw=$('#sheetWeb');if(bw)bw.onclick=function(){window.open('https://www.baidu.com/s?wd='+encodeURIComponent(s.t+' '+INSTRUMENT_META[cur.leaf].label+' 简谱 五线谱'),'_blank');};
-  const bm2=$('#sheetMus');if(bm2)bm2.onclick=function(){window.open('https://musescore.com/scores?text='+encodeURIComponent(s.t),'_blank');};
-  const bn=$('#sheet8n');if(bn)bn.onclick=function(){window.open('https://www.8notes.com/scores/search.asp?q='+encodeURIComponent(s.t),'_blank');};
   const bi=$('#sheetImgBaidu');if(bi)bi.onclick=function(){window.open('https://image.baidu.com/search/index?tn=baiduimage&word='+encodeURIComponent(s.t+' '+INSTRUMENT_META[cur.leaf].label+' 简谱'),'_blank');};
-  const gi=$('#sheetImgGoogle');if(gi)gi.onclick=function(){window.open('https://www.google.com/search?tbm=isch&q='+encodeURIComponent(s.t+' '+INSTRUMENT_META[cur.leaf].label+' sheet music'),'_blank');};
 }
 /* 节拍器引擎 */
 let metro={ctx:null,running:false,timer:null,next:0,beat:0,bpm:100,beats:4};
@@ -9224,7 +9220,7 @@ function showRecipeDetail(idx){
 }
 
 /* 衣橱穿搭（尽简衣橱多级 + AI 推荐） */
-/* ===== 推荐购买指南：选购知识库 + 身材档案 + AI 全套搭配 + 2D 试穿间 ===== */
+/* ===== 推荐购买指南：选购知识库 + 身材档案 + AI 全套搭配 ===== */
 const BUY_GUIDE=[
  {g:'🧵 面料材质怎么看',items:[
   {k:'纯棉',tip:'亲肤透气吸汗，贴身首选。避雷：易缩水起球，选「精梳棉/丝光棉」更耐；纯棉秋衣出汗后贴身反冷，运动场景选混纺速干。'},
@@ -9279,7 +9275,7 @@ function openBuyGuide(kw){
 function bodyProfile(){return getGlobal('bodyProfile')||{};}
 function openBodyProfile(cb){
   const p=bodyProfile();
-  openForm('🧍 身材档案（搭配与试穿用）',[
+  openForm('🧍 身材档案（AI 全套搭配用）',[
     {key:'height',label:'身高 cm（如 165）'},
     {key:'weight',label:'体重 kg'},
     {key:'bust',label:'胸围 cm（选填）'},
@@ -9290,13 +9286,11 @@ function openBodyProfile(cb){
     {key:'style',label:'偏好风格',type:'select',options:['简约','温柔','帅气','甜美','街头','通勤干练']}
   ],p,(v)=>{setGlobal('bodyProfile',v);toast('身材档案已保存 🧍');if(cb)cb(v);render();});
 }
-function shopLinks(kw){
-  const e=encodeURIComponent(kw);
-  return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">'+
-    '<a class="btn sm" target="_blank" rel="noopener" href="https://s.taobao.com/search?q='+e+'" style="text-decoration:none;">🔍 淘宝</a>'+
-    '<a class="btn sm" target="_blank" rel="noopener" href="https://search.jd.com/Search?keyword='+e+'" style="text-decoration:none;">🔍 京东</a>'+
-    '<a class="btn sm" target="_blank" rel="noopener" href="https://mobile.yangkeduo.com/search_result.html?search_key='+e+'" style="text-decoration:none;">🔍 拼多多</a>'+
-    '<span style="font-size:10px;color:var(--sub);align-self:center;">直达搜索页，按要点自己比价</span></div>';
+function copyText(t){
+  try{
+    if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).catch(()=>{});return;}
+    const ta=document.createElement('textarea');ta.value=t;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();
+  }catch(e){}
 }
 const LOOK_SLOTS=['帽子','发型','耳饰','上装','外套','下装','鞋','包袋','配饰'];
 function openFullLook(){
@@ -9372,7 +9366,7 @@ function openFullLook(){
         out+='</div>';
         if(s.use==='buy'){
           if(s.why)out+='<div style="font-size:11.5px;color:var(--sub);margin-top:3px;line-height:1.7;">💬 '+esc(s.why)+'</div>';
-          if(s.kw)out+=shopLinks(s.kw);
+          if(s.kw)out+='<div style="display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap;"><span style="font-size:11.5px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:3px 8px;">🔍 '+esc(s.kw)+'</span><button class="btn sm" data-copykw="'+escA(s.kw)+'">📋 复制关键词</button></div>';
         }
         out+='</div>';
       });
@@ -9381,7 +9375,7 @@ function openFullLook(){
     return out;
   };
   const bindLookBtns=()=>{
-    document.querySelectorAll('[data-looktry]').forEach(el=>el.onclick=()=>{window.__lookIdx=Number(el.dataset.looktry);});
+    document.querySelectorAll('[data-copykw]').forEach(el=>el.onclick=()=>{copyText(el.dataset.copykw);toast('📋 已复制，去购物 App 粘贴搜索');});
   };
   draw();
 }
