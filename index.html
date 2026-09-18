@@ -4556,6 +4556,7 @@ function renderMe(){
   h+='<div class="card"><div class="card-title">💾 本地备份与恢复 <span class="r" style="font-weight:400;font-size:11px;color:var(--sub);">按日期·模块分类</span></div>'+
     '<div class="card-sub">所有数据自动本地备份，按日期和模块分类管理，支持跨网页版导入导出。</div>'+
     '<div class="btn-row"><button class="btn primary" data-act="backupNow">💾 立即备份</button><button class="btn" data-act="exportData">📤 全量导出</button><button class="btn" data-act="exportByModule">📦 按模块导出</button><button class="btn" data-act="importData">📥 导入</button></div>'+
+    '<div class="btn-row"><button class="btn ghost sm" data-act="exportFull" style="flex:1;">📦 大备份（含曲库/录音/小说，换设备用这个）</button></div>'+
     '<div style="max-height:280px;overflow-y:auto;border:1.5px solid var(--line);border-radius:12px;padding:8px;background:var(--input);margin-top:8px;">';
   if(!backups.length)h+='<div class="fv empty">暂无备份记录</div>';
   /* 按日期分组 */
@@ -4579,6 +4580,8 @@ function renderMe(){
     '<div class="row"><span class="k">本地记录天数</span><span class="v">'+st.days+' 天</span></div>'+
     '<div class="row"><span class="k">占用估算</span><span class="v">'+st.size+'</span></div>'+
     '<div class="row"><span class="k">最后备份</span><span class="v">'+(backups.length?backups[backups.length-1].time:'未备份')+'</span></div>'+
+    '<div class="row"><span class="k">当前网址</span><span class="v" style="font-size:11px;">'+esc(location.host||'本地')+(location.host==='nikio555555.github.io'?' ✅ 主站':' ⚠️ 备用')+'</span></div>'+
+    (location.host!=='nikio555555.github.io'?'<div style="font-size:11px;color:#d35400;background:rgba(230,126,34,.1);border-radius:10px;padding:8px 10px;line-height:1.7;margin-top:4px;">⚠️ 你正从备用网址打开工作台——每个网址的数据是独立保存、互不互通的。日常请使用主网址 <b>nikio555555.github.io/workbench</b>，换网址前先「大备份」再在新网址「导入」。</div>':'')+
     '</div>';
   // 本地历史记录（浏览足迹）——默认折叠，点标题展开/收起
   const visits=getVisits();
@@ -4733,6 +4736,15 @@ function importData(){
     const r=new FileReader();r.onload=()=>{
       try{
         const obj=JSON.parse(r.result);
+        if(obj.type==='workbench_full_v2'){
+          const st=obj.idb||{};
+          let ph='<div style="font-size:12px;color:var(--sub);line-height:2;margin-bottom:8px;">检测到 <b>大备份</b>（'+String(obj.ts||'').slice(0,19).replace('T',' ')+')<br>📊 数据项：'+Object.keys(obj.data||{}).length+' 项<br>🎵 曲库音频：'+(st.bgm||[]).length+' 首<br>🎙 录音：'+(st.media||[]).length+' 条<br>📖 小说：'+(st.novel||[]).length+' 本</div>';
+          ph+='<div style="font-size:11px;color:var(--red);margin-bottom:6px;">⚠️ 导入将覆盖当前全部数据（含曲库/录音），请确认已备份！</div>';
+          ph+='<button class="btn primary" id="impV2Btn" style="width:100%;">📥 导入全部（含媒体）</button>';
+          $('#impPreview').innerHTML=ph;
+          $('#impV2Btn').onclick=()=>{closeSheet();toast('正在导入，请稍候…');importPackV2(obj);};
+          return;
+        }
         const snap=obj.data||obj; // 兼容模块导出和全量导出
         const mods=obj.modules||backupModules(snap);
         const count=Object.keys(snap).length;
@@ -4825,6 +4837,58 @@ function exportData(){
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='workbench-backup-'+todayStr()+'.json';a.click();
   appLog('data','导出备份 JSON');
   toast('已开始导出');
+}
+/* ===== 数据守护：升级数据完好确认 + 大备份（含 IndexedDB 媒体） ===== */
+const WB_BUILD='2026-09-19.1';
+function wbKeyCount(){let n=0;for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith('wb_'))n++;}return n;}
+function dataGuard(){
+  try{
+    const last=localStorage.getItem('wb_build');
+    if(!last){localStorage.setItem('wb_build',WB_BUILD);return;}
+    if(last!==WB_BUILD){
+      localStorage.setItem('wb_build',WB_BUILD);
+      try{backupNow('auto');}catch(e){}
+      setTimeout(()=>toast('工作台已升级 ✅ 你的数据都在（'+wbKeyCount()+' 项）'),2200);
+    }
+  }catch(e){}
+}
+function hostGuard(){
+  try{
+    if(location.host==='nikio555555.github.io')return;
+    if(sessionStorage.getItem('wb_hostwarn'))return;
+    sessionStorage.setItem('wb_hostwarn','1');
+    setTimeout(()=>toast('⚠️ 备用网址的数据与主站不互通，日常请用主网址'),2600);
+  }catch(e){}
+}
+function blobToB64(b){return new Promise(res=>{if(!b)return res(null);const r=new FileReader();r.onload=()=>res(String(r.result).split(',')[1]||'');r.onerror=()=>res(null);r.readAsDataURL(b);});}
+function b64ToBlob(b64,mime){try{const bin=atob(b64||'');const u8=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);return new Blob([u8],{type:mime||'application/octet-stream'});}catch(e){return null;}}
+function novelDbAll(){return idbOpen().then(db=>new Promise((res,rej)=>{const rq=db.transaction(IDB_STORE,'readonly').objectStore(IDB_STORE).getAll();rq.onsuccess=()=>res(rq.result||[]);rq.onerror=()=>rej(rq.error);}).catch(()=>[])).catch(()=>[]);}
+async function exportDataFull(){
+  toast('正在打包（含音频/小说/录音，可能需要一点时间）…');
+  const snap=localSnapshot();
+  const bgm=[],novel=[],media=[];
+  try{const db=await bgmDB();const all=await bgmDBAll(db);for(const s of all){bgm.push({id:s.id,name:s.name,lrc:s.lrc||null,mime:(s.blob&&s.blob.type)||'audio/mpeg',b64:await blobToB64(s.blob)});}}catch(e){}
+  try{const recs=await mdibAll();for(const r of recs){media.push({id:r.id,name:r.name,date:r.date,inst:r.inst,ts:r.ts,mime:(r.blob&&r.blob.type)||'',b64:await blobToB64(r.blob)});}}catch(e){}
+  try{const txts=await novelDbAll();for(const t of txts){novel.push({id:t.id,text:t.text});}}catch(e){}
+  const pack={type:'workbench_full_v2',app:'workbench',ts:new Date().toISOString(),data:snap,idb:{bgm:bgm,novel:novel,media:media}};
+  const blob=new Blob([JSON.stringify(pack)],{type:'application/json'});
+  const sz=blob.size;
+  if(sz>100*1048576&&!confirm('备份文件约 '+(sz/1048576).toFixed(0)+'MB（含音频），可能较大，继续导出？'))return;
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='workbench-full-'+todayStr()+'.json';a.click();
+  appLog('data','大备份导出（曲库'+bgm.length+'/录音'+media.length+'/小说'+novel.length+'）');
+  toast('已开始下载大备份 📦');
+}
+async function importPackV2(obj){
+  let nData=0;
+  try{Object.keys(obj.data||{}).forEach(k=>{if(k.startsWith('wb_')){localStorage.setItem(k,obj.data[k]);nData++;}});}catch(e){}
+  const st=obj.idb||{};let nB=0,nM=0,nN=0;
+  try{const db=await bgmDB();for(const s of (st.bgm||[])){const blob=b64ToBlob(s.b64,s.mime);if(!blob)continue;await bgmDBPut(db,{id:s.id,name:s.name,lrc:s.lrc||null,blob:blob});nB++;}}catch(e){}
+  try{for(const r of (st.media||[])){const blob=b64ToBlob(r.b64,r.mime);if(!blob)continue;await mdibPut({id:r.id,blob:blob,name:r.name,date:r.date,inst:r.inst,ts:r.ts});nM++;}}catch(e){}
+  try{for(const t of (st.novel||[])){await idbSet(t.id,t.text);nN++;}}catch(e){}
+  store=load();SETTINGS=loadTheme();
+  backupNow('manual');appLog('import','大备份导入（数据'+nData+'项/曲库'+nB+'/录音'+nM+'/小说'+nN+'）');
+  closeSheet();toast('导入完成 ✅ 数据'+nData+'项 · 曲库'+nB+'首 · 录音'+nM+'条 · 小说'+nN+'本');
+  render();
 }
 /* ===== 云端同步引擎（仿"过期啦"：账户 + 多端 + 上传/下载/合并 + 同步历史） ===== */
 function getAccount(){
@@ -9928,6 +9992,7 @@ function bindCommon(){
   c.querySelectorAll('[data-pedit]').forEach(el=>el.onclick=editBodyProfile);
   c.querySelectorAll('[data-act="backupNow"]').forEach(el=>el.onclick=()=>backupNow('manual'));
   c.querySelectorAll('[data-act="exportData"]').forEach(el=>el.onclick=exportData);
+  c.querySelectorAll('[data-act="exportFull"]').forEach(el=>el.onclick=exportDataFull);
   c.querySelectorAll('[data-act="exportByModule"]').forEach(el=>el.onclick=exportByModule);
   c.querySelectorAll('[data-act="importData"]').forEach(el=>el.onclick=importData);
   c.querySelectorAll('[data-bkdetail]').forEach(el=>el.onclick=()=>viewBackupDetail(el.dataset.bkdetail));
@@ -14371,6 +14436,8 @@ function init(){
     applyTheme();applyPattern();applyFont();buildThemeMenu();buildBottom();buildNavTree();
     if(!getGlobal('profile'))setGlobal('profile',{name:'nikio',id:'wb_'+Math.random().toString(36).slice(2,10),bio:'',avatar:'🌟'});
     autoBackup();
+    try{dataGuard();}catch(e){}
+    try{hostGuard();}catch(e){}
     try{initLive();}catch(e){console.warn('initLive',e);} // 实时行情引擎：盘中定时刷新
     // 热点：版本号升级时重置旧 SEED，避免展示过期示例；否则陈旧（>30 分钟）静默刷新
     try{
