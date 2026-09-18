@@ -8994,7 +8994,260 @@ function showRecipeDetail(idx){
 }
 
 /* 衣橱穿搭（尽简衣橱多级 + AI 推荐） */
+/* ===== 推荐购买指南：选购知识库 + 身材档案 + AI 全套搭配 + 2D 试穿间 ===== */
+const BUY_GUIDE=[
+ {g:'🧵 面料材质怎么看',items:[
+  {k:'纯棉',tip:'亲肤透气吸汗，贴身首选。避雷：易缩水起球，选「精梳棉/丝光棉」更耐；纯棉秋衣出汗后贴身反冷，运动场景选混纺速干。'},
+  {k:'莫代尔/莱赛尔（天丝）',tip:'比棉更滑更垂、吸湿好不易皱，内裤/吊带首选。避雷：吊牌写「莱赛尔纤维」才是真天丝；混纺里莱赛尔低于 30% 就是蹭概念。'},
+  {k:'真丝（桑蚕丝）',tip:'吊牌「100%桑蚕丝」才是真丝，姆米数 22 以上更挺更耐用。避雷：「仿真丝」「真丝手感」=聚酯纤维；价格低于 200 的连衣裙基本不可能是真丝。'},
+  {k:'羊毛/羊绒',tip:'羊绒吊牌必须写「山羊绒含量」，100% 山羊绒才算纯羊绒；「绵羊绒」不是羊绒，是普通细羊毛，这是最常见的文字游戏。羊毛看支数，100s 以上细腻。'},
+  {k:'聚酯纤维（涤纶）',tip:'挺括耐磨快干不皱，风衣/运动装主力。避雷：贴身穿闷汗不透气；吊牌第一位是聚酯=含量最高，别被「冰感科技面料」话术忽悠。'},
+  {k:'锦纶（尼龙）+氨纶',tip:'泳衣/瑜伽裤/冲锋衣主力，「锦纶+20%氨纶」弹力塑形最好。避雷：氨纶低于 15% 的紧身裤蹲下容易透。'},
+  {k:'亚麻',tip:'夏季散热之王，越洗越软，吸汗不贴身。避雷：纯亚麻必然皱，「抗皱亚麻」=混了涤纶；接受不了皱就选棉麻混纺。'},
+  {k:'羽绒',tip:'只看「绒子含量」四个字：90% 绒子是高品质线，蓬松度 600+ 更保暖更轻。避雷：只写「含绒量90%」「白鸭绒90%」不写绒子含量的=旧国标库存货。'}
+ ]},
+ {g:'🏷 吊牌执行标准（看懂这一行=内行）',items:[
+  {k:'GB 18401 安全类别',tip:'国家强制标准：A 类=婴幼儿（最严），B 类=可直接接触皮肤，C 类=仅外衣。内衣/秋衣/T恤/床品必须 B 类起；吊牌没有安全类别这一行=三无产品，直接放下。'},
+  {k:'GB/T 14272-2021 羽绒服',tip:'2022 年 4 月起执行的新国标：「绒子含量」≥50% 才能叫羽绒服；旧标「含绒量」作废。买羽绒服先翻吊牌执行标准是不是 14272-2021。'},
+  {k:'GB=强制 / GB/T=推荐 / FZ/T=行业',tip:'GB 开头必须达标；GB/T 推荐性但有才可信；FZ/T 是纺织行业标准，常出现在内衣/袜子吊牌。标准号后括号里的年份越新要求越严。'},
+  {k:'质量等级：优等品＞一等品＞合格品',tip:'同价位闭眼选优等品——色牢度、缩水率、起球等级要求最严格。「合格品」只是合法底线，不是卖点。'},
+  {k:'GB 31701 婴童装',tip:'给小孩买：A 类 + GB 31701 双标齐全；头颈部不能有绳带、附件要牢固（抗拉力标准）。'},
+  {k:'GB/T 29862 纤维含量',tip:'吊牌必须标每种纤维的具体百分比，只写「棉型面料」「高科技纤维」不写比例的可以直接举报。'}
+ ]},
+ {g:'⚠️ 高频避雷清单',items:[
+  {k:'内衣内裤',tip:'安全类别必须 B 类以上；裆部最好是纯棉；「抗菌/石墨烯/纳米」多为溢价噱头。深色内衣泡水掉色严重的=染料不合格嫌疑，退。'},
+  {k:'羽绒服',tip:'三步验货：拍打看回弹（快=绒好）、闻腥味（重=清洁差）、捏针脚（钻绒=工艺差）。店员说「含绒量90%」就追问「绒子含量多少」。'},
+  {k:'大衣',tip:'「100%羊毛」优先；双面呢手感好但易勾丝；含羊毛 50%+ 就有质感。避雷：又轻又便宜的「羊毛大衣」基本是化纤，羊毛比重看吊牌第一位成分。'},
+  {k:'鞋',tip:'鞋底认「橡胶外底」，全 EVA 底两个月就塌；小白鞋看鞋面头层皮>PU；下午试鞋（脚会肿胀 3-5mm），码数按脚长+0.5~1cm。'},
+  {k:'防晒衣',tip:'必须同时有 UPF40+ 标注和 GB/T 18830 执行标准（UVA 透过率<5%）。普通薄外套印个「防晒」俩字不算防晒衣，别多花钱。'},
+  {k:'瑜伽裤/紧身裤',tip:'锦纶为主+氨纶 18-22% 拉伸最好；深色做深蹲测试防透；「裸感」=面料克重低+高氨纶，透不透和厚度无关和织法有关。'}
+ ]},
+ {g:'🧥 分季选购要点',items:[
+  {k:'大衣（秋）',tip:'长度过膝最显比例，H 版型不挑身材；羊毛羊绒混纺 30% 以上手感明显高级；垫肩决定气场，落肩决定温柔。'},
+  {k:'羽绒服（冬）',tip:'南方 80% 绒子够用；东北 90% 绒子+充绒量 200g+；充绒量比蓬松度更决定绝对保暖，两个都看。'},
+  {k:'保暖内衣（冬）',tip:'「德绒」认吊牌 Dralon 字样+B 类；纯棉秋衣出汗贴身反而冷，腈纶/莫代尔混纺速干更暖；加绒款看绒的密度不是厚度。'},
+  {k:'夏 T',tip:'重磅 T 选 230g+ 克重挺括不透，180-220g 日常；领口有双压条/螺纹的不易松垮变形；透不透捏起来对光看。'}
+ ]}
+];
+function openBuyGuide(kw){
+  kw=(kw||'').trim();
+  let found=false;
+  let h='<input class="inp" id="bgKw" placeholder="🔍 搜索：真丝 / 绒子 / UPF / 大衣 / 内衣…" value="'+esc(kw)+'" style="width:100%;box-sizing:border-box;margin-bottom:10px;">';
+  BUY_GUIDE.forEach(sec=>{
+    const arr=sec.items.filter(x=>!kw||x.k.indexOf(kw)>=0||x.tip.indexOf(kw)>=0);
+    if(!arr.length)return;
+    found=true;
+    h+='<div class="gtitle">'+sec.g+'</div>';
+    arr.forEach(x=>{h+='<div class="card" style="padding:11px;margin-bottom:8px;"><div style="font-weight:800;font-size:13px;">'+esc(x.k)+'</div><div style="font-size:12px;line-height:1.9;margin-top:4px;color:var(--sub);">'+esc(x.tip)+'</div></div>';});
+  });
+  if(!found)h+='<div class="fv empty">没找到「'+esc(kw)+'」，换个关键词试试</div>';
+  h+='<div style="font-size:10.5px;color:var(--sub);text-align:center;margin-top:6px;">选购知识库本地内置 · 离线可用 · 仅供参考</div>';
+  openSheet('📖 选购指南',h);
+  const inp=$('#bgKw');
+  if(inp)inp.oninput=e=>{clearTimeout(window.__bgT);window.__bgT=setTimeout(()=>openBuyGuide(e.target.value),450);};
+}
+function bodyProfile(){return getGlobal('bodyProfile')||{};}
+function openBodyProfile(cb){
+  const p=bodyProfile();
+  openForm('🧍 身材档案（搭配与试穿用）',[
+    {key:'height',label:'身高 cm（如 165）'},
+    {key:'weight',label:'体重 kg'},
+    {key:'bust',label:'胸围 cm（选填）'},
+    {key:'waist',label:'腰围 cm（选填）'},
+    {key:'hip',label:'臀围 cm（选填）'},
+    {key:'shoe',label:'鞋码（如 38）'},
+    {key:'skin',label:'肤色',type:'select',options:['偏白','自然','偏黄','小麦','偏黑']},
+    {key:'style',label:'偏好风格',type:'select',options:['简约','温柔','帅气','甜美','街头','通勤干练']}
+  ],p,(v)=>{setGlobal('bodyProfile',v);toast('身材档案已保存 🧍');if(cb)cb(v);render();});
+}
+function shopLinks(kw){
+  const e=encodeURIComponent(kw);
+  return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">'+
+    '<a class="btn sm" target="_blank" rel="noopener" href="https://s.taobao.com/search?q='+e+'" style="text-decoration:none;">🔍 淘宝</a>'+
+    '<a class="btn sm" target="_blank" rel="noopener" href="https://search.jd.com/Search?keyword='+e+'" style="text-decoration:none;">🔍 京东</a>'+
+    '<a class="btn sm" target="_blank" rel="noopener" href="https://mobile.yangkeduo.com/search_result.html?search_key='+e+'" style="text-decoration:none;">🔍 拼多多</a>'+
+    '<span style="font-size:10px;color:var(--sub);align-self:center;">直达搜索页，按要点自己比价</span></div>';
+}
+const LOOK_SLOTS=['帽子','发型','耳饰','上装','外套','下装','鞋','包袋','配饰'];
+function openFullLook(){
+  const p=bodyProfile();
+  const w=getGlobal('weather');
+  const season=(w&&w.temp!=null)?(w.temp>=26?'夏':(w.temp>=16?'春':(w.temp>=6?'秋':'冬'))):'秋';
+  const occs=['通勤','休闲','约会','运动','正式'];
+  if(!window.__lookOcc)window.__lookOcc='通勤';
+  let lookBusy=false;
+  const draw=()=>{
+    const g=getGlobal('wardrobe');
+    const own=(g.items||[]).map(it=>(it.cat||'')+'「'+(it.name||'单品')+'」'+(it.color||'')+(it.season&&it.season!=='四季'?'('+it.season+')':'')).join('、')||'（衣橱还是空的）';
+    let h='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">'+occs.map(o=>'<span class="ft'+(window.__lookOcc===o?' active':'')+'" data-lookocc="'+o+'" style="cursor:pointer;">'+o+'</span>').join('')+
+      '<span class="ft" data-lookbody="1" style="cursor:pointer;">🧍 身材档案</span></div>';
+    h+='<div class="fv" style="font-size:11.5px;color:var(--sub);margin-bottom:8px;">'+season+'季 · '+(p.height?p.height+'cm '+(p.weight?p.weight+'kg':''):'身材未填')+' · '+(llmReady()?'AI 引擎：'+llmLabel():'本地模板（接 AI 后更个性）')+'</div>';
+    h+='<button class="btn primary" id="lookGo" style="width:100%;">✨ 生成全套搭配（发型帽子到鞋）</button>';
+    h+='<div id="lookOut" style="margin-top:10px;">';
+    const saved=getGlobal('fullLook');
+    if(saved&&saved.looks&&saved.looks.length)h+=renderLooks(saved);
+    h+='</div>';
+    openSheet('✨ 全套穿搭推荐',h);
+    document.querySelectorAll('[data-lookocc]').forEach(el=>el.onclick=()=>{window.__lookOcc=el.dataset.lookocc;draw();});
+    const bb=document.querySelector('[data-lookbody]');
+    if(bb)bb.onclick=()=>{closeSheet();openBodyProfile(()=>{openFullLook();});};
+    $('#lookGo').onclick=()=>{
+      if(lookBusy)return;
+      const occ=window.__lookOcc;
+      if(llmReady()){
+        lookBusy=true;
+        $('#lookOut').innerHTML='<div style="text-align:center;padding:18px;color:var(--sub);font-size:12px;">⏳ AI 造型师生成中（约 10-30 秒）…</div>';
+        const prompt='你是专业时尚造型师。用户身材：身高'+(p.height||'未填')+'cm，体重'+(p.weight||'未填')+'kg，胸围'+(p.bust||'未填')+'，腰围'+(p.waist||'未填')+'，臀围'+(p.hip||'未填')+'，鞋码'+(p.shoe||'未填')+'，肤色'+(p.skin||'未填')+'，偏好风格'+(p.style||'未填')+'。当前季节：'+season+'。场合：'+occ+'。\n用户衣橱已有单品：'+own+'\n请生成 2 套全套搭配，每套必须覆盖全部部位：'+LOOK_SLOTS.join('、')+'。要求：\n1) 衣橱已有的品类优先用已有单品：use="have"，name 写衣橱里的单品名\n2) 衣橱缺的品类：use="buy"，name=推荐单品简述，kw=购物搜索关键词（品类+风格+关键参数，12-18字），why=推荐理由（材质/版型/性价比/通用度角度，30-45字），budget=参考价位\n3) 每套给 tip=整体造型要点（一句话）\n只输出 JSON，格式：{"looks":[{"name":"方案名","tip":"...","slots":[{"slot":"帽子","use":"buy","name":"...","kw":"...","why":"...","budget":"..."},{"slot":"上装","use":"have","name":"..."}]}]}';
+        llmChat([{role:'system',content:'你是专业造型师，只输出合法 JSON，不输出其他任何文字。'},{role:'user',content:prompt}]).then(txt=>{
+          let looks=null;
+          try{const j=JSON.parse(txt.slice(txt.indexOf('{'),txt.lastIndexOf('}')+1));looks=j.looks;}catch(e){}
+          if(!looks||!looks.length){$('#lookOut').innerHTML='<div class="fv empty">AI 返回格式异常，重试一次</div>';lookBusy=false;return;}
+          const save={occ:occ,season:season,looks:looks,ts:Date.now()};
+          setGlobal('fullLook',save);window.__lookIdx=0;
+          $('#lookOut').innerHTML=renderLooks(save);
+          bindLookBtns();lookBusy=false;
+        }).catch(e=>{$('#lookOut').innerHTML='<div class="fv empty">AI 调用失败（'+esc(e.message)+'），已用本地模板替代</div>'+renderLooks(localLook(occ,season));bindLookBtns();lookBusy=false;});
+      }else{
+        const save=localLook(occ,season);
+        setGlobal('fullLook',save);window.__lookIdx=0;
+        $('#lookOut').innerHTML=renderLooks(save);bindLookBtns();
+      }
+    };
+    bindLookBtns();
+  };
+  const localLook=(occ,season)=>{
+    const lib=OUTFIT_LIB.filter(o=>o.occ===occ);
+    const mk=(name,itms)=>{
+      const slots=LOOK_SLOTS.map(s=>{
+        const map={'上装':'上装','外套':'外套','下装':'下装','鞋':'鞋履','包袋':'包袋','配饰':'配饰'};
+        const ownIt=(getGlobal('wardrobe').items||[]).find(it=>it.cat===(map[s]||s));
+        const libIt=itms.find(n=>s==='帽子'?/帽/.test(n):s==='耳饰'?/耳|饰/.test(n):s==='发型'?/发/.test(n):s==='配饰'?/表|巾|镜|带/.test(n):true);
+        if(ownIt)return {slot:s,use:'have',name:ownIt.name||ownIt.cat};
+        return {slot:s,use:'buy',name:(libIt||('百搭'+s)),kw:(s==='鞋'?'百搭休闲鞋 简约':s==='上装'?'纯棉T恤 基础款 简约':s==='下装'?'直筒裤 休闲 百搭':s==='外套'?'牛仔外套 经典款':s==='帽子'?'棒球帽 简约 百搭':'简约百搭 '+(s==='配饰'?'腕表':'单品')),why:'基础款通用度高、不易过时，先满足「有得穿」再逐步升级质感',budget:s==='鞋'?'200-400':'100 以内'};
+      });
+      return {name:name,tip:lib[0]&&lib[0].tip||'同色系深浅搭配最稳',slots:slots};
+    };
+    return {occ:occ,season:season,looks:[mk(occ+'·基础百搭方案',lib[0]?lib[0].items:[]),mk(occ+'·进阶质感方案',lib[1]?lib[1].items:[])],ts:Date.now()};
+  };
+  const renderLooks=save=>{
+    let out='';
+    save.looks.forEach((lk,i)=>{
+      out+='<div class="card" style="padding:12px;margin-bottom:10px;"><div style="display:flex;align-items:center;gap:8px;"><div style="font-weight:800;font-size:14px;">✨ '+esc(lk.name||('方案'+(i+1)))+'</div><button class="btn sm'+(window.__lookIdx===i?' primary':'')+'" data-looktry="'+i+'" style="margin-left:auto;flex:none;">🧍 去试穿</button></div>';
+      if(lk.tip)out+='<div style="font-size:11.5px;color:var(--sub);margin-top:4px;">💡 '+esc(lk.tip)+'</div>';
+      out+='<div style="margin-top:8px;">';
+      (lk.slots||[]).forEach(s=>{
+        out+='<div style="border-top:1px dashed var(--line);padding:7px 0;"><div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"><span class="pill" style="flex:none;">'+esc(s.slot)+'</span>';
+        if(s.use==='have')out+='<span style="font-size:12.5px;font-weight:700;color:var(--brand);">✅ '+esc(s.name||'')+'</span><span style="font-size:10px;color:var(--sub);">衣橱已有</span>';
+        else out+='<span style="font-size:12.5px;font-weight:700;">🛍 '+esc(s.name||'')+'</span>'+(s.budget?'<span class="pill" style="font-size:9.5px;">'+esc(s.budget)+'</span>':'');
+        out+='</div>';
+        if(s.use==='buy'){
+          if(s.why)out+='<div style="font-size:11.5px;color:var(--sub);margin-top:3px;line-height:1.7;">💬 '+esc(s.why)+'</div>';
+          if(s.kw)out+=shopLinks(s.kw);
+        }
+        out+='</div>';
+      });
+      out+='</div></div>';
+    });
+    return out;
+  };
+  const bindLookBtns=()=>{
+    document.querySelectorAll('[data-looktry]').forEach(el=>el.onclick=()=>{window.__lookIdx=Number(el.dataset.looktry);closeSheet();openStudio();});
+  };
+  draw();
+}
 const WARD_CATS=['上装','下装','外套','鞋履','包袋','配饰'];
+/* —— 2D 虚拟试穿间：按身材档案渲染形象，点击部位弹出搭配详情/购买入口 —— */
+const COLOR_MAP={'白':'#f5f5f2','黑':'#2c2c2a','灰':'#9a9a96','红':'#c0392b','蓝':'#2e6db4','绿':'#3B6D11','黄':'#d9a520','粉':'#d98ca6','紫':'#7d5bb5','棕':'#8a6642','米':'#d8cfc0','卡其':'#b3a077','杏':'#e3c8a8','驼':'#b08d5e','牛仔':'#5a7d9a','橙':'#d87a30','青':'#3a9a9a','银':'#c9ccd1','金':'#c9a227','军绿':'#5a6b3a','藏青':'#2c3e5c'};
+function colorOf(text,dft){
+  const s=String(text||'');
+  for(const k in COLOR_MAP){if(s.indexOf(k)>=0)return COLOR_MAP[k];}
+  return dft||'#8ea3b0';
+}
+function skinOf(p){return {'偏白':'#f3dfd0','自然':'#ecc9ad','偏黄':'#e3bd96','小麦':'#d3a173','偏黑':'#b07e50'}[p.skin]||'#ecc9ad';}
+function openStudio(){
+  const p=bodyProfile();
+  const save=getGlobal('fullLook');
+  const look=(save&&save.looks&&(save.looks[window.__lookIdx||0]||save.looks[0]))||null;
+  const slotOf=n=>{if(!look)return null;const arr=(look.slots||[]).filter(s=>s.slot===n);return arr.length?arr[0]:null;};
+  const hW=p.height?Number(p.height):165;
+  const wF=Math.max(0.88,Math.min(1.35,(p.waist&&p.height)?Number(p.waist)/(Number(p.height)*0.43):1));
+  const sk=skinOf(p);
+  const topS=slotOf('上装'),hatS=slotOf('帽子'),botS=slotOf('下装'),shoeS=slotOf('鞋'),earS=slotOf('耳饰'),bagS=slotOf('包袋'),accS=slotOf('配饰'),hairS=slotOf('发型'),coatS=slotOf('外套');
+  const topC=colorOf(topS&&(topS.name||''),'#8ea3b0'),botC=colorOf(botS&&(botS.name||''),'#3a4552'),shoeC=colorOf(shoeS&&(shoeS.name||''),'#d8d8d4'),coatC=colorOf(coatS&&(coatS.name||''),'#b3a077'),hatC=colorOf(hatS&&(hatS.name||''),'#5f5e5a');
+  const isSkirt=botS&&/裙/.test(botS.name||'');
+  const headR=30*Math.pow(165/hW,0.35);
+  const cx=110;
+  let svg='<svg id="studioSvg" viewBox="0 0 220 560" width="100%" style="max-height:60vh;">';
+  svg+='<rect x="0" y="0" width="220" height="560" rx="16" fill="#f6f4ef"/>';
+  /* 身体 */
+  svg+='<g data-wslot="发型" style="cursor:pointer;">';
+  svg+='<circle cx="'+cx+'" cy="'+(70)+'" r="'+headR+'" fill="'+sk+'"/>';
+  svg+='<path d="M '+(cx-headR)+' '+(70)+' a '+headR+' '+headR+' 0 0 1 '+(headR*2)+' 0 l 0 '+(-headR*0.45)+' a '+headR+' '+headR+' 0 0 0 '+(-headR*2)+' 0 z" fill="#4a342a"/>';
+  svg+='<path d="M '+(cx-headR*0.95)+' '+(66)+' q '+(-headR*0.5)+' '+(70)+' '+(headR*0.35)+' '+(95)+' l '+(headR*0.5)+' 0 q '+(headR*0.3)+' '+(30)+' '+(headR*0.55)+' '+(-8)+' l 0 '+(-60)+' z" fill="#4a342a"/>';
+  svg+='</g>';
+  if(hatS){svg+='<g data-wslot="帽子" style="cursor:pointer;"><path d="M '+(cx-headR*1.02)+' '+(58)+' a '+(headR*1.02)+' '+(headR*0.9)+' 0 0 1 '+(headR*2.04)+' 0 z" fill="'+hatC+'"/><rect x="'+(cx-headR*1.25)+'" y="'+(54)+'" width="'+(headR*2.5)+'" height="6" rx="3" fill="'+hatC+'"/></g>';}
+  svg+='<rect x="'+(cx-9)+'" y="'+(70+headR-6)+'" width="18" height="26" fill="'+sk+'"/>';
+  if(earS){svg+='<g data-wslot="耳饰" style="cursor:pointer;"><circle cx="'+(cx-headR-3)+'" cy="'+(78)+'" r="3.5" fill="#c9a227"/><circle cx="'+(cx+headR+3)+'" cy="'+(78)+'" r="3.5" fill="#c9a227"/></g>';}
+  /* 躯干+上装 */
+  const shW=34*wF,waistW=26*wF,torTop=70+headR+20,torH=118;
+  svg+='<g data-wslot="上装" style="cursor:pointer;">';
+  svg+='<path d="M '+(cx-shW)+' '+torTop+' L '+(cx+shW)+' '+torTop+' L '+(cx+waistW)+' '+(torTop+torH)+' L '+(cx-waistW)+' '+(torTop+torH)+' z" fill="'+topC+'"/>';
+  svg+='<path d="M '+(cx-8)+' '+torTop+' l 8 14 l 8 -14 z" fill="rgba(0,0,0,.14)"/>';
+  svg+='</g>';
+  /* 手臂（肤色） */
+  svg+='<rect x="'+(cx-shW-13*wF)+'" y="'+(torTop+4)+'" width="'+(11*wF)+'" height="'+(96)+'" rx="6" fill="'+sk+'"/>';
+  svg+='<rect x="'+(cx+shW+2*wF)+'" y="'+(torTop+4)+'" width="'+(11*wF)+'" height="'+(96)+'" rx="6" fill="'+sk+'"/>';
+  /* 外套：两侧翻开 */
+  if(coatS){svg+='<g data-wslot="外套" style="cursor:pointer;"><path d="M '+(cx-shW-4)+' '+(torTop-2)+' L '+(cx-shW-14*wF)+' '+(torTop+torH+6)+' L '+(cx-shW+6)+' '+(torTop+torH+6)+' L '+(cx-shW+8)+' '+(torTop+30)+' z" fill="'+coatC+'"/><path d="M '+(cx+shW+4)+' '+(torTop-2)+' L '+(cx+shW+14*wF)+' '+(torTop+torH+6)+' L '+(cx+shW-6)+' '+(torTop+torH+6)+' L '+(cx+shW-8)+' '+(torTop+30)+' z" fill="'+coatC+'"/></g>';}
+  /* 配饰（项链/腕表） */
+  if(accS){svg+='<g data-wslot="配饰" style="cursor:pointer;"><path d="M '+(cx-13)+' '+(torTop+6)+' q 13 16 26 0" fill="none" stroke="#c9a227" stroke-width="2"/><circle cx="'+cx+'" cy="'+(torTop+21)+'" r="3" fill="#c9a227"/></g>';}
+  const hipY=torTop+torH;
+  if(isSkirt){svg+='<g data-wslot="下装" style="cursor:pointer;"><path d="M '+(cx-waistW)+' '+hipY+' L '+(cx+waistW)+' '+hipY+' L '+(cx+40*wF)+' '+(hipY+86)+' L '+(cx-40*wF)+' '+(hipY+86)+' z" fill="'+botC+'"/></g>';
+    svg+='<rect x="'+(cx-11*wF)+'" y="'+(hipY+86)+'" width="'+(9*wF)+'" height="34" fill="'+sk+'"/>';
+    svg+='<rect x="'+(cx+2*wF)+'" y="'+(hipY+86)+'" width="'+(9*wF)+'" height="34" fill="'+sk+'"/>';
+  }else{
+    svg+='<g data-wslot="下装" style="cursor:pointer;">';
+    svg+='<path d="M '+(cx-waistW)+' '+hipY+' L '+(cx+waistW)+' '+hipY+' L '+(cx+waistW-3)+' '+(hipY+120)+' L '+(cx+5)+' '+(hipY+120)+' L '+cx+' '+(hipY+40)+' L '+(cx-5)+' '+(hipY+120)+' L '+(cx-waistW+3)+' '+(hipY+120)+' z" fill="'+botC+'"/>';
+    svg+='</g>';
+  }
+  const legY=isSkirt?hipY+120:hipY+120;
+  /* 鞋 */
+  svg+='<g data-wslot="鞋" style="cursor:pointer;"><ellipse cx="'+(cx-11*wF)+'" cy="'+(legY+38)+'" rx="'+(13*wF)+'" ry="7" fill="'+shoeC+'"/><ellipse cx="'+(cx+11*wF)+'" cy="'+(legY+38)+'" rx="'+(13*wF)+'" ry="7" fill="'+shoeC+'"/></g>';
+  /* 包 */
+  if(bagS){const bagC=colorOf(bagS.name||'','#8a6642');svg+='<g data-wslot="包袋" style="cursor:pointer;"><rect x="'+(cx+shW+14*wF)+'" y="'+(torTop+66)+'" width="22" height="26" rx="5" fill="'+bagC+'"/><path d="M '+(cx+shW+16*wF)+' '+(torTop+66)+' q 9 -14 18 0" fill="none" stroke="'+bagC+'" stroke-width="2.5"/></g>';}
+  svg+='</svg>';
+  const parts=LOOK_SLOTS.slice();
+  let h='<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">';
+  h+='<span class="pill">'+(p.height?p.height+'cm · '+(p.weight||'?')+'kg':'⚠️ 身材未填')+'</span>'+(look?'<span class="pill">'+esc(look.name||'方案')+'</span>':'')+'<button class="btn ghost sm" id="stBody" style="margin-left:auto;flex:none;">🧍 编辑身材</button></div>';
+  if(!look)h+='<div class="card" style="background:var(--brand-light);"><div style="font-size:12.5px;line-height:1.8;">还没有搭配方案。先「✨ 生成全套搭配」，形象就会穿上那套衣服；也可以直接点形象上的部位看建议。</div></div>';
+  h+='<div id="stSvgWrap">'+svg+'</div>';
+  h+='<div style="font-size:11px;color:var(--sub);text-align:center;margin:4px 0 8px;">👆 点击形象上的部位（帽子/头发/耳饰/上衣/外套/下装/鞋/包）看详情</div>';
+  h+='<div class="card" style="padding:10px;"><div style="font-size:11.5px;color:var(--sub);">形象按你的身材比例渲染（腰围/身高驱动体型），肤色随档案同步；属示意形象，非真人照片。</div></div>';
+  openSheet('🧍 虚拟试穿间',h);
+  $('#stBody').onclick=()=>{closeSheet();openBodyProfile(()=>openStudio());};
+  document.querySelectorAll('#studioSvg [data-wslot]').forEach(el=>el.onclick=()=>openWSlot(el.dataset.wslot));
+}
+function openWSlot(slot){
+  const save=getGlobal('fullLook');
+  const look=(save&&save.looks&&(save.looks[window.__lookIdx||0]||save.looks[0]))||null;
+  let h='<div class="gtitle">👀 '+esc(slot)+'</div>';
+  const s=look&&(look.slots||[]).find(x=>x.slot===slot);
+  if(s){
+    if(s.use==='have'){
+      h+='<div class="card"><div class="card-title">✅ 衣橱已有</div><div style="font-size:14px;font-weight:800;">'+esc(s.name||'')+'</div></div>';
+      const it=(getGlobal('wardrobe').items||[]).find(x=>(x.name||'')===s.name||(x.cat||'')===s.name);
+      if(it&&it.src)h+='<div style="text-align:center;"><img src="'+it.src+'" style="max-width:200px;max-height:200px;border-radius:12px;"></div>';
+    }else{
+      h+='<div class="card"><div class="card-title">🛍 推荐购买</div><div style="font-size:14px;font-weight:800;">'+esc(s.name||'')+'</div>'+(s.budget?'<div style="font-size:12px;color:var(--sub);margin-top:3px;">💰 参考价位：'+esc(s.budget)+'</div>':'')+(s.why?'<div style="font-size:12px;line-height:1.8;margin-top:6px;">💬 '+esc(s.why)+'</div>':'')+(s.kw?shopLinks(s.kw):'')+'</div>';
+      h+='<div class="card" style="background:var(--brand-light);"><div style="font-size:11px;line-height:1.7;color:var(--sub);">链接直达平台搜索结果页（关键词已按推荐优化）。纯前端应用拿不到实时商品价格与店铺数据，下单前用「📖 选购指南」的吊牌标准核对材质与安全类别。</div></div>';
+    }
+  }else{
+    h+='<div class="fv empty">这套搭配没有覆盖「'+esc(slot)+'」。去「✨ 生成全套搭配」让它覆盖全部部位。</div><button class="btn primary" id="wsgGo" style="width:100%;margin-top:8px;">✨ 生成全套搭配</button>';
+  }
+  openSheet('👀 '+slot,h);
+  const go=$('#wsgGo');
+  if(go)go.onclick=()=>{closeSheet();openFullLook();};
+}
 /* 胶囊衣橱：从现有单品自动组合搭配 */
 let LAST_CAPS=[];
 function capsuleSuggestions(g){
@@ -9042,6 +9295,8 @@ function renderWardrobe(){
   if(!g.layout)g.layout='grid';
   let h='<div class="card"><div class="card-title">👗 衣橱 · 我的单品</div><div class="card-sub">仿「尽简衣橱」多级分类管理</div>';
   h+='<div class="upload-row"><button class="btn primary" data-act="addcloth">＋ 添加单品</button><button class="btn" data-act="cutcloth">✂️ 抠图添加</button><button class="btn" data-act="aioutfit">🤖 AI 穿搭推荐</button></div>';
+  h+='<div class="upload-row"><button class="btn" data-wact="buyguide">📖 选购指南</button><button class="btn" data-wact="fulllook">✨ 全套搭配</button><button class="btn" data-wact="studio">🧍 虚拟试穿</button><button class="btn" data-wact="body">🧍‍♀️ 身材档案</button></div>';
+  h+='<div class="card" data-wact="buyguide" style="cursor:pointer;background:linear-gradient(135deg,#fdeef0,#fbeeee);border:1px solid #f0c8ce;"><div style="display:flex;align-items:center;gap:8px;"><div style="font-size:24px;">🛍</div><div style="flex:1;min-width:0;"><div style="font-weight:800;font-size:13px;">推荐购买指南</div><div style="font-size:10.5px;color:var(--sub);margin-top:2px;">面料材质 · 吊牌执行标准 · 避雷清单 · 全套搭配与购买直达</div></div><div style="color:var(--sub);font-size:18px;">›</div></div></div>';
   h+=topActions('wardrobe',false,'');
   h+='<div class="ly-row"><span class="lbl">单品排版</span>'+layoutSwitchHTML('wardrobe',g.layout,[
     {v:'grid',i:'▦',t:'网格'},{v:'list',i:'☰',t:'列表'},{v:'card',i:'🖼',t:'大图'}
@@ -11475,6 +11730,13 @@ function editDiet(){
 function bindWardrobe(){
   const c=$('#content');
   bindWardrobeClicks();
+  c.querySelectorAll('[data-wact]').forEach(el=>el.onclick=()=>{
+    const a=el.dataset.wact;
+    if(a==='buyguide')openBuyGuide('');
+    else if(a==='fulllook')openFullLook();
+    else if(a==='studio')openStudio();
+    else if(a==='body')openBodyProfile();
+  });
   c.querySelectorAll('[data-cat]').forEach(el=>el.onclick=()=>{
     $$('#wardFilters .ft').forEach(x=>x.classList.toggle('active',x.dataset.cat===el.dataset.cat));
     const g=getGlobal('wardrobe');
