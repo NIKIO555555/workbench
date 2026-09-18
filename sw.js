@@ -1,7 +1,8 @@
 /* 超级工作台 Service Worker：离线可用 + 联网静默更新
    策略：页面=网络优先(离线回落缓存)；音乐/图片大文件=缓存优先；跨域请求(API)直连不缓存 */
-const CACHE = 'wb-cache-20260919';
-const CORE = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png'];
+const CACHE = 'wb-cache-20260919b';
+const CORE = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png',
+  './music/carefree.mp3', './music/deliberate.mp3', './music/thinking.mp3', './music/wallpaper.mp3'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(CORE)).then(() => self.skipWaiting()));

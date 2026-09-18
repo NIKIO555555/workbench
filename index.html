@@ -1554,14 +1554,14 @@ function pickVoice(lang){
     const g=SETTINGS.voiceGender;
     if(g==='female'){const f=sameLang.find(x=>FEMALE_KEYS.some(k=>x.name.toLowerCase().includes(k)));if(f)return f;}
     if(g==='male'){const m=sameLang.find(x=>MALE_KEYS.some(k=>x.name.toLowerCase().includes(k)));if(m)return m;}
-    // 4) 优先非"花俏"音色，再优先网络自然音色
+    // 4) 优先非"花俏"音色，再优先本地引擎音色（关键：远程音色如 Chrome 的 Google 语音在国内网络连不上，会"选中了却永远无声"）
     const clean=sameLang.filter(x=>!/whisper|bells|bubbles|zarvox|trinoids|albert|bad news|organ|cello|grandma|samantha.*joke/i.test(x.name));
     const pool=clean.length?clean:sameLang;
-    const net=pool.find(x=>x.localService===false);if(net)return net;
+    const loc=pool.find(x=>x.localService!==false);if(loc)return loc;
     return pool[0];
   }
   const fam=vs.filter(x=>norm(x).startsWith(ll.slice(0,2)));
-  if(fam.length)return fam[0];
+  if(fam.length){const lf=fam.find(x=>x.localService!==false);return lf||fam[0];}
   // 关键修复：无任何同语言音色时，绝不回退到错误语言（如日语回退到中文音）
   return null;
 }
@@ -1591,9 +1591,10 @@ function speak(text,lang){
     u.volume=1;
     let ttsStarted=false,fellBack=false;
     u.onstart=()=>{ttsStarted=true;};
-    /* 唯一兜底出口：仅当系统 TTS 从未真正开始朗读时触发一次（fellBack 防重，杜绝双播） */
-    const fallback=()=>{
-      if(fellBack||ttsStarted)return;
+    /* 唯一兜底出口：系统 TTS 从未出声（未 start，或 start 后报错=实际没读到字）→ 切在线发音（fellBack 防重，杜绝双播） */
+    const fallback=(force)=>{
+      if(fellBack)return;
+      if(ttsStarted&&!force)return;
       fellBack=true;
       try{synth.cancel();}catch(e){}
       onlineSpeak(text,lang).then(ok=>gate(()=>{if(!ok)toast('朗读失败：系统 TTS 不可用');}));
@@ -1607,7 +1608,7 @@ function speak(text,lang){
         return;
       }
     }
-    u.onerror=(e)=>{const c=e&&e.error;if(c==='interrupted'||c==='canceled')return;gate(fallback);};
+    u.onerror=(e)=>{const c=e&&e.error;if(c==='interrupted'||c==='canceled')return;gate(()=>fallback(true));};
     // 持有 utterance 引用，防止部分浏览器 GC 导致无声
     window.__curUtter=u;
     const doSpeak=()=>{try{synth.resume();synth.speak(u);}catch(e){gate(fallback);}};
@@ -1643,10 +1644,9 @@ function speakLong(text,lang){
   parts.forEach(p=>{while(p.length>170){chunks.push(p.slice(0,170));p=p.slice(170);}if(p)chunks.push(p);});
   if(!chunks.length)return;
   __speakQueue=chunks;
-  /* 无任何系统音色（国产 ROM 无 TTS 引擎）→ 全程走在线发音（中/英） */
-  const hasSysVoice=(VOICES.length?VOICES:('speechSynthesis'in window?window.speechSynthesis.getVoices():[])).length>0;
-  if(!hasSysVoice){
-    let oi=0,oFail=0;
+  /* 在线分段队列：无系统音色、或系统音色中途坏死（如远程 Google 音色连不上）时统一走这里 */
+  const runOnlineQueue=(fromIdx)=>{
+    let oi=fromIdx,oFail=0;
     const oNext=()=>{
       if(__speakStop)return;
       if(oi>=__speakQueue.length){if(typeof __speakOnEnd==='function'){const cb=__speakOnEnd;__speakOnEnd=null;cb();}return;}
@@ -1673,9 +1673,12 @@ function speakLong(text,lang){
       };
       tick();
     };
-    oNext();return;
-  }
-  let idx=0;
+    oNext();
+  };
+  /* 无任何系统音色（国产 ROM 无 TTS 引擎）→ 全程走在线发音（中/英） */
+  const hasSysVoice=(VOICES.length?VOICES:('speechSynthesis'in window?window.speechSynthesis.getVoices():[])).length>0;
+  if(!hasSysVoice){runOnlineQueue(0);return;}
+  let idx=0,sysBroken=false;
   const next=()=>{
     if(__speakStop)return;if(idx>=__speakQueue.length){if(typeof __speakOnEnd==='function'){const cb=__speakOnEnd;__speakOnEnd=null;cb();}return;}
     const seg=__speakQueue[idx++];
@@ -1683,8 +1686,16 @@ function speakLong(text,lang){
       const u=new SpeechSynthesisUtterance(seg);
       u.lang=lang;u.rate=Number(SETTINGS.voiceRate)||0.95;u.pitch=Number(SETTINGS.voicePitch)||1;u.volume=1;
       const v=pickVoice(lang);if(v)u.voice=v;
-      u.onend=()=>setTimeout(next,60);
-      u.onerror=(e)=>{const c=e&&e.error;if(c==='interrupted'||c==='canceled'){__speakStop=true;return;}setTimeout(next,120);};
+      let adv=false;
+      const advance=(ms)=>{if(adv)return;adv=true;setTimeout(next,ms||60);};
+      u.onend=()=>advance(60);
+      u.onerror=(e)=>{
+        const c=e&&e.error;
+        if(c==='interrupted'||c==='canceled'){__speakStop=true;return;}
+        /* 系统 TTS 报错（典型：选中远程音色且网络不可达）→ 剩余段落整体切在线发音，绝不静默跳过整篇 */
+        if(!sysBroken&&!adv){adv=true;sysBroken=true;try{window.speechSynthesis.cancel();}catch(e2){}runOnlineQueue(idx);return;}
+        advance(120);
+      };
       window.__curUtter=u;
       window.speechSynthesis.speak(u);
     }catch(e){}
@@ -2038,6 +2049,7 @@ function openVoiceLab(){
       window.speechSynthesis.cancel();
       const u=new SpeechSynthesisUtterance(langSample(v.lang));
       u.lang=v.lang;u.voice=v;u.rate=Number(SETTINGS.voiceRate)||0.95;u.pitch=Number(SETTINGS.voicePitch)||1;
+      u.onerror=(e)=>{const c=e&&e.error;if(c==='interrupted'||c==='canceled')return;toast('该音色无法出声'+(v.localService===false?'（在线音色，当前网络连不上）':'')+'，建议换本地音色');};
       window.__curUtter=u;
       setTimeout(()=>{try{window.speechSynthesis.resume();window.speechSynthesis.speak(u);}catch(e){}},80);
     }catch(e){toast('试听失败');}
@@ -4945,7 +4957,7 @@ function exportData(){
   toast('已开始导出');
 }
 /* ===== 数据守护：升级数据完好确认 + 大备份（含 IndexedDB 媒体） ===== */
-const WB_BUILD='2026-09-19.5';
+const WB_BUILD='2026-09-19.6';
 function wbKeyCount(){let n=0;for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith('wb_'))n++;}return n;}
 function dataGuard(){
   try{
@@ -6750,9 +6762,27 @@ function renderTrend(){
 }
 async function refreshFundLive(){
   toast('正在拉取实时板块…');
-  const j=await fetchJSON('https://api.vvhan.com/api/stock/board');
   let sectors=null;
-  if(j&&j.data&&Array.isArray(j.data)&&j.data.length){sectors=j.data.slice(0,16).map(d=>({name:String(d.name||d.title||''),change:Number((d.change!=null?d.change:(d.zdf!=null?d.zdf:0))||0)}));}
+  /* 主源 vvhan（域名已不稳定），失败自动切东财行业板块 JSONP（push2，实测稳定） */
+  try{
+    const j=await fetchJSON('https://api.vvhan.com/api/stock/board',8000);
+    if(j&&j.data&&Array.isArray(j.data)&&j.data.length){sectors=j.data.slice(0,16).map(d=>({name:String(d.name||d.title||''),change:Number((d.change!=null?d.change:(d.zdf!=null?d.zdf:0))||0)}));}
+  }catch(e){}
+  if(!(sectors&&sectors.length)){
+    try{
+      const url='https://push2.eastmoney.com/api/qt/clist/get?cb=__embd&pn=1&pz=16&po=1&np=1&fltt=2&invt=2&fid=f3&fs='+encodeURIComponent('m:90+t:2')+'&fields=f3,f14';
+      sectors=await new Promise((res)=>{
+        const prev=window.__embd;let done=false;
+        const fin=v=>{if(done)return;done=true;window.__embd=prev;res(v||null);};
+        window.__embd=function(d){
+          const diff=(d&&d.data&&d.data.diff)||[];
+          const arr=(Array.isArray(diff)?diff:Object.values(diff)).map(x=>({name:String(x.f14||''),change:Number(x.f3)||0})).filter(x=>x.name);
+          fin(arr.length?arr:null);
+        };
+        jsonpLoad(url,9000).catch(()=>fin(null));
+      });
+    }catch(e){}
+  }
   const rec=getRec('finance',cur.date)||{};
   if(!rec.fund)rec.fund=JSON.parse(JSON.stringify(SEED_FINANCE.fund));
   if(sectors&&sectors.length){rec.fund.sectors=sectors;setRec('finance',cur.date,rec);render();toast('板块行情已更新 ✅');}
