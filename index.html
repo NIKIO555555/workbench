@@ -1037,7 +1037,7 @@ const BOTTOM=[
  {id:'life',title:'生活',icon:'🌿',topTitle:'生活中心',topIcon:'🌿',leaf:'life_hub'},
  {id:'wardrobe',title:'衣橱',icon:'👗',topTitle:'我的衣橱',topIcon:'👗',leaf:'life_wardrobe'},
  {id:'sport',title:'运动',icon:'🏃',topTitle:'运动中心',topIcon:'🏃',leaf:'life_sport'},
- {id:'doctor',title:'医生',icon:'🩺',topTitle:'医生中心',topIcon:'🩺',leaf:'doctor'},
+ {id:'doctor',title:'健康',icon:'🩺',topTitle:'健康中心',topIcon:'🩺',leaf:'doctor'},
  {id:'pet',title:'毛球',icon:'🐶',topTitle:'毛球乐园',topIcon:'🐶',leaf:'life_pet'},
  {id:'study',title:'学习',icon:'🎓',topTitle:'学习中心',topIcon:'🎓',leaf:'study_hub'},
  {id:'finance',title:'财经',icon:'📈',topTitle:'财经中心',topIcon:'📈',leaf:'fin_hold'},
@@ -8749,8 +8749,8 @@ function dietSysPrompt(){
 }
 function docSysPrompt(deptName){
   return '你是一名'+deptName+'方向的 AI 健康助手（辅助分诊与健康咨询，非诊断）。使用者健康档案：本人＝遗传性多囊肾、肾结石、肥胖；家人＝肥胖合并三高。'
-  +'根据症状描述回答：1) 初步分析（常见可能方向，不下确定诊断）；2) 居家护理建议；3) 需立即就医的警示信号（红黄绿紧急度）。'
-  +'简洁分点，控制在 400 字内，结尾注明「AI 建议仅供参考，不能替代医生面诊」。';
+  +'根据症状描述回答：1) 初步分析（常见可能方向，不下确定诊断）；2) 居家护理建议；3) 需立即就医的警示信号。'
+  +'【重要】回复第一行必须是且只能是这三种之一：「【就医分级：红-尽快就医】」「【就医分级：黄-择期门诊】」「【就医分级：绿-居家观察】」，依据症状严重程度判定（多囊肾患者出现剧烈腰痛/肉眼血尿/发热/尿量骤减一律红）。之后正文再分点展开，控制在 400 字内，结尾注明「AI 建议仅供参考，不能替代医生面诊」。';
 }
 function openLlmSettings(){
   const cur=llmConf()||{provider:'kimi',model:'',key:''};
@@ -10795,53 +10795,63 @@ function compressImg(file,cb){
 function renderDoctor(){
   const consults=docConsults();
   const activeCnt=consults.filter(c=>c.status==='待回复'||c.status==='已回复').length;
+  const meds=hMeds();
+  const nextAppt=(hAppts().filter(a=>!a.done).sort((a,b)=>(a.date+(a.time||'')).localeCompare(b.date+(b.time||'')))[0])||null;
   let h='';
-  /* 急救提示 */
-  h+='<div style="background:linear-gradient(135deg,#c0392b,#e74c3c);border-radius:14px;padding:12px 14px;color:#fff;margin-bottom:10px;">'+
+  /* 急救提示（置顶红灯） */
+  h+='<div style="background:linear-gradient(135deg,#c0392b,#e74c3c);border-radius:14px;padding:12px 14px;color:#fff;margin-bottom:10px;cursor:pointer;" data-docact="redlight">'+
      '<div style="font-weight:800;font-size:14px;">🚨 紧急情况请直接拨打 120</div>'+
-     '<div style="font-size:11.5px;margin-top:4px;opacity:.95;">胸痛 / 呼吸困难 / 意识不清 / 大出血 / 突发口角歪斜、一侧无力、言语不清（中风）→ 不要等，立即就医！</div></div>';
+     '<div style="font-size:11.5px;margin-top:4px;opacity:.95;">胸痛 / 呼吸困难 / 意识不清 / 大出血 / 剧烈腰痛伴血尿 / 突发口角歪斜、一侧无力、言语不清（中风）→ 不要等，立即就医！</div>'+
+     '<div style="font-size:10.5px;margin-top:6px;opacity:.85;">点这里看完整「危险信号」清单 →</div></div>';
   /* 主入口 */
   h+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;"><span style="font-size:11px;color:var(--sub);">AI 引擎：'+llmLabel()+'</span><button class="btn ghost sm" style="margin-left:auto;flex:none;" data-docact="llmcfg">⚙️ AI设置</button></div>';
+  /* 顶部状态条：用药 / 预约 */
+  const medDue=medsDueNow();
+  if(medDue.length)h+='<div class="card" style="background:#fff7ed;border:1px solid #f59e0b;margin-bottom:10px;"><div class="card-title">⏰ 服药提醒</div><div style="font-size:12.5px;line-height:1.8;">'+medDue.map(m=>esc(m.name)+'（'+m.dose+'）').join('、')+' 到点了</div><button class="btn primary sm" data-docact="meds" style="margin-top:6px;">去打卡</button></div>';
+  if(nextAppt)h+='<div class="card" style="background:var(--brand-light);margin-bottom:10px;"><div class="card-title">📅 下一趟就医</div><div style="font-size:12.5px;">'+esc(nextAppt.date+' '+nextAppt.time)+' · '+esc(nextAppt.hosp)+(nextAppt.dept?' '+esc(nextAppt.dept):'')+(nextAppt.doc?' '+esc(nextAppt.doc):'')+'</div><div style="font-size:10.5px;color:var(--sub);margin-top:3px;">就诊前记得看「就诊准备」里的问题清单</div></div>';
+  /* 六宫格入口 */
   h+='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px;">'+
-     '<div class="grid-card" data-docact="triage" style="text-align:center;padding:14px 6px;cursor:pointer;"><div style="font-size:26px;">🔍</div><div style="font-weight:800;font-size:12.5px;margin-top:4px;">AI 症状自查</div><div style="font-size:10px;color:var(--sub);margin-top:2px;">描述不舒服，先查查</div></div>'+
-     '<div class="grid-card" data-docact="consult" style="text-align:center;padding:14px 6px;cursor:pointer;"><div style="font-size:26px;">💬</div><div style="font-weight:800;font-size:12.5px;margin-top:4px;">图文问诊</div><div style="font-size:10px;color:var(--sub);margin-top:2px;">线上问医生</div></div>'+
-     '<div class="grid-card" data-docact="history" style="text-align:center;padding:14px 6px;cursor:pointer;"><div style="font-size:26px;">📋</div><div style="font-weight:800;font-size:12.5px;margin-top:4px;">我的问诊</div><div style="font-size:10px;color:var(--sub);margin-top:2px;">'+(activeCnt?activeCnt+' 条进行中':'历史记录')+'</div></div></div>';
-  /* 科室导航 */
-  h+='<div class="card"><div class="card-title">🏥 科室导航</div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">'+
-     DOC_DEPT_DB.map(d=>'<div class="grid-card" data-docact="dept" data-dept="'+d.id+'" style="text-align:center;padding:11px 2px;cursor:pointer;"><div style="font-size:24px;">'+d.icon+'</div><div style="font-weight:800;font-size:11.5px;margin-top:3px;">'+d.name+'</div><div style="font-size:9px;color:var(--sub);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+d.diseases[0]+'</div></div>').join('')+
-     '</div></div>';
-  /* 热门医生（按科室 tab） */
-  h+='<div class="card"><div class="card-title">👨‍⚕️ 在线医生 <span style="font-size:10px;color:#b7791f;font-weight:600;">示例数据 · 真实问诊请用正规平台</span></div>';
-  h+='<div class="filter-tabs" id="docDeptTabs" style="margin-bottom:8px;"><span class="ft'+(!window.__docDeptTab?' active':'')+'" data-docdept="all">全部</span>'+DOC_DEPT_DB.slice(0,8).map(d=>'<span class="ft'+(window.__docDeptTab===d.id?' active':'')+'" data-docdept="'+d.id+'">'+d.icon+' '+d.name+'</span>').join('')+'</div>';
-  const tab=window.__docDeptTab||'all';
-  const docs=DOCTOR_DB.filter(d=>tab==='all'||d.dept===tab);
-  h+='<div style="display:flex;flex-direction:column;gap:8px;">'+docs.map(d=>docCard(d)).join('')+'</div></div>';
-  /* 科普提示 */
-  h+='<div class="card" style="background:var(--brand-light);"><div class="card-title">📚 健康小贴士</div><div style="font-size:12px;line-height:1.8;color:var(--sub);">• AI 自查与问诊回复仅作参考，不能替代医生面诊。<br>• 慢病人群（三高/肾病等）建议结合「饮食中心 - AI 健康膳食顾问」看忌口与食谱。<br>• 定期体检：血压、血糖、血脂、尿酸、肝肾功能，每年至少 1 次。</div></div>';
+     '<div class="grid-card" data-docact="consult" style="text-align:center;padding:14px 6px;cursor:pointer;"><div style="font-size:26px;">💬</div><div style="font-weight:800;font-size:12.5px;margin-top:4px;">AI 问诊</div><div style="font-size:10px;color:var(--sub);margin-top:2px;">描述不舒服，问 AI</div></div>'+
+     '<div class="grid-card" data-docact="triage" style="text-align:center;padding:14px 6px;cursor:pointer;"><div style="font-size:26px;">🔍</div><div style="font-weight:800;font-size:12.5px;margin-top:4px;">症状自查</div><div style="font-size:10px;color:var(--sub);margin-top:2px;">快速分诊定级别</div></div>'+
+     '<div class="grid-card" data-docact="history" style="text-align:center;padding:14px 6px;cursor:pointer;"><div style="font-size:26px;">📋</div><div style="font-weight:800;font-size:12.5px;margin-top:4px;">我的问诊</div><div style="font-size:10px;color:var(--sub);margin-top:2px;">'+(activeCnt?activeCnt+' 条进行中':'历史记录')+'</div></div>'+
+     '<div class="grid-card" data-docact="profile" style="text-align:center;padding:14px 6px;cursor:pointer;"><div style="font-size:26px;">📈</div><div style="font-weight:800;font-size:12.5px;margin-top:4px;">健康档案</div><div style="font-size:10px;color:var(--sub);margin-top:2px;">指标趋势图</div></div>'+
+     '<div class="grid-card" data-docact="meds" style="text-align:center;padding:14px 6px;cursor:pointer;"><div style="font-size:26px;">💊</div><div style="font-weight:800;font-size:12.5px;margin-top:4px;">用药管家</div><div style="font-size:10px;color:var(--sub);margin-top:2px;">'+(meds.length?meds.length+' 种药在管':'服药提醒打卡')+'</div></div>'+
+     '<div class="grid-card" data-docact="appts" style="text-align:center;padding:14px 6px;cursor:pointer;"><div style="font-size:26px;">📅</div><div style="font-weight:800;font-size:12.5px;margin-top:4px;">就诊准备</div><div style="font-size:10px;color:var(--sub);margin-top:2px;">问题清单+预约</div></div></div>';
+  /* 疾病百科 */
+  h+='<div class="card" data-docact="wiki" style="cursor:pointer;"><div style="display:flex;align-items:center;gap:8px;"><div style="font-size:24px;">📚</div><div style="flex:1;min-width:0;"><div style="font-weight:800;font-size:13px;">疾病百科</div><div style="font-size:10.5px;color:var(--sub);margin-top:2px;">'+HEALTH_CONDITIONS.length+' 种疾病：忌口 / 原则 / 风险，可搜索</div></div><div style="color:var(--sub);font-size:18px;">›</div></div></div>';
+  /* 健康小贴士 */
+  h+='<div class="card" style="background:var(--brand-light);"><div class="card-title">💡 使用说明</div><div style="font-size:12px;line-height:1.8;color:var(--sub);">• AI 问诊与自查结果仅作参考，<b>不能替代医生面诊</b>；红色分级请立即就医。<br>• 慢病人群（三高/肾病）建议结合「饮食 · AI 健康膳食顾问」看忌口与食谱。<br>• 健康档案里定期录血压/肌酐等指标，趋势图一目了然。<br>• 服药提醒需保持本页面处于打开状态。</div></div>';
   return h;
 }
-function docCard(d){
-  const dep=DOC_DEPT_DB.find(x=>x.id===d.dept);
-  return '<div class="list-item" data-docact="doctor" data-doc="'+d.id+'" style="cursor:pointer;padding:10px;">'+
-    '<div style="display:flex;gap:10px;align-items:center;">'+
-    '<div style="width:44px;height:44px;border-radius:50%;background:var(--brand-light);display:flex;align-items:center;justify-content:center;font-size:24px;flex:none;">'+d.face+'</div>'+
-    '<div style="flex:1;min-width:0;"><div style="display:flex;align-items:center;gap:6px;"><span style="font-weight:800;font-size:13.5px;">'+d.name+'</span><span class="pill" style="font-size:9px;">'+d.title+'</span></div>'+
-    '<div style="font-size:10.5px;color:var(--sub);margin-top:2px;">'+d.hosp+' · '+dep.name+'</div>'+
-    '<div style="font-size:10.5px;color:var(--sub);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">擅长：'+d.good+'</div></div>'+
-    '<div style="text-align:right;flex:none;"><div style="font-size:12px;color:#e67e22;font-weight:800;">★ '+d.score.toFixed(1)+'</div><div style="font-size:9.5px;color:var(--sub);">¥'+d.price+' 图文</div></div></div></div>';
+/* 科室详情 */
+function openDeptDetail(id){
+  const d=DOC_DEPT_DB.find(x=>x.id===id);if(!d)return;
+  let h='<div class="gtitle">'+d.icon+' '+d.name+'科</div>';
+  h+='<div style="font-size:12px;color:var(--sub);margin-bottom:8px;">'+d.desc+'</div>';
+  h+='<div class="card"><div class="card-title">常见病症</div><div style="display:flex;flex-wrap:wrap;gap:6px;">'+d.diseases.map(x=>'<span class="pill">'+x+'</span>').join('')+'</div></div>';
+  h+='<div class="card"><div class="card-title">就诊小贴士</div><div style="font-size:12px;line-height:1.8;color:var(--sub);">挂这个科之前，先在「就诊准备」里生成问题清单，把症状、时长、正在吃的药整理好，面诊效率更高。</div></div>';
+  h+='<button class="btn primary" data-consdept="'+d.id+'" style="width:100%;">💬 向 AI 咨询'+d.name+'方向</button>';
+  openSheet('🏥 '+d.name+'科',h);
+  const cb=document.querySelector('[data-consdept]');
+  if(cb)cb.onclick=()=>{closeSheet();openConsult(d.id,'');};
 }
-/* 医生详情 */
-function openDocDetail(id){
-  const d=DOCTOR_DB.find(x=>x.id===id);if(!d)return;
-  const dep=DOC_DEPT_DB.find(x=>x.id===d.dept);
-  openSheet('👨‍⚕️ '+d.name+' '+d.title,
-    '<div style="text-align:center;padding:10px 0;"><div style="font-size:52px;">'+d.face+'</div><div style="font-weight:800;font-size:16px;margin-top:6px;">'+d.name+' <span class="pill">'+d.title+'</span></div><div style="font-size:12px;color:var(--sub);margin-top:4px;">'+d.hosp+' · '+dep.name+'</div><div style="font-size:12px;color:#e67e22;margin-top:4px;">★ '+d.score.toFixed(1)+'　已服务 '+d.cnt+' 人次</div></div>'+
-    '<div class="card" style="margin-top:10px;"><div class="card-title">擅长</div><div style="font-size:12.5px;">'+d.good+'</div></div>'+
-    '<div class="card" style="margin-top:8px;"><div class="card-title">出诊时间</div><div style="font-size:12.5px;">'+d.sched+'</div></div>'+
-    '<div class="card" style="margin-top:8px;"><div class="card-title">图文问诊</div><div style="font-size:12px;color:var(--sub);">¥'+d.price+' / 次 · 48 小时内回复（演示）</div><button class="btn primary" data-askdoc="'+d.id+'" style="width:100%;margin-top:8px;">💬 咨询这位医生</button></div>'+
-    '<div style="font-size:10.5px;color:#b7791f;margin-top:8px;text-align:center;">⚠ 医生信息为演示数据，真实问诊请使用正规医疗平台</div>');
-  const btn=$('[data-askdoc="'+id+'"]');
-  if(btn)btn.onclick=()=>openConsult(d.dept,d.name);
+/* 绑定 */
+function bindDoctor(){
+  const c=$('#content');
+  c.querySelectorAll('[data-docact]').forEach(el=>el.onclick=()=>{
+    const a=el.dataset.docact;
+    if(a==='triage')openTriageSheet('');
+    else if(a==='consult')openConsult('','');
+    else if(a==='history')openConsultHistory();
+    else if(a==='profile')openHealthProfile();
+    else if(a==='meds')openMeds();
+    else if(a==='appts')openAppts();
+    else if(a==='wiki')openMedicalWiki('');
+    else if(a==='redlight')openRedLight();
+    else if(a==='dept')openDeptDetail(el.dataset.dept);
+    else if(a==='llmcfg')openLlmSettings();
+  });
+  if(!window.__hTickSet){window.__hTickSet=true;setInterval(hMedTick,30000);}
 }
 /* 分诊 Sheet */
 function openTriageSheet(pre){
@@ -10882,10 +10892,23 @@ function openConsult(deptId,preDesc){
   h+='<label class="ef"><span>选择科室</span><select id="consDept">'+DOC_DEPT_DB.map(d=>'<option value="'+d.id+'"'+(d.id===deptId?' selected':'')+'>'+d.icon+' '+d.name+'</option>').join('')+'</select></label>';
   h+='<label class="ef"><span>症状描述（越详细越好）</span><textarea id="consDesc" class="inp" rows="4" style="width:100%;box-sizing:border-box;" placeholder="例：咳嗽一周，晚上加重，有白痰，体温37.8℃，之前吃了感冒药效果不明显…">'+esc(preDesc)+'</textarea></label>';
   h+='<label class="ef"><span>病程时长</span><select id="consDur"><option>1-3 天</option><option>4-7 天</option><option>1-2 周</option><option>超过 2 周</option><option>慢性（1 个月以上）</option></select></label>';
+  h+='<label class="ef"><span>部位（可选）</span><input id="consPart" class="inp" placeholder="例：左侧腰部 / 上腹 / 咽喉" style="width:100%;box-sizing:border-box;"></label>';
+  h+='<label class="ef"><span>难受程度：1（轻微）～ 10（难以忍受），当前 <b id="consSevLbl">5</b></span><input id="consSev" type="range" min="1" max="10" value="5" style="width:100%;"></label>';
+  h+='<div style="font-size:11.5px;color:var(--sub);margin:8px 0 4px;">伴随症状（点选，可多选）</div><div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;">'+['发热','恶心','呕吐','头晕','乏力','尿频','尿急','血尿','腹泻','便秘','失眠','食欲差'].map(s=>'<span class="pill" data-accin="'+s+'" style="cursor:pointer;">'+s+'</span>').join('')+'</div><div id="consAccOut" style="font-size:11px;color:var(--brand);min-height:16px;"></div>';
   h+='<div style="font-size:11.5px;color:var(--sub);margin:8px 0 4px;">📷 可选：上传症状部位照片</div><button class="btn ghost" id="consImgBtn" style="width:100%;">📷 选择图片</button><input type="file" id="consImg" accept="image/*" style="display:none;"><div id="consImgPrev"></div>';
   h+='<button class="btn primary" id="consGo" style="width:100%;margin-top:10px;">💬 提交问诊'+(llmReady()?'（AI 大模型）':'（本地模板）')+'</button>';
   h+='<div style="font-size:10.5px;color:var(--sub);margin-top:8px;">'+(llmReady()?'⚠ AI 回复由大模型生成，仅供健康参考，不能替代医生面诊。急症请直接 120。':'⚠ 当前为本地模板回复，去「饮食 · AI问答」右上角「AI设置」接入 Kimi/通义千问可获得真实 AI 医生。急症请直接 120。')+'</div>';
   openSheet('🏥 图文问诊',h);
+  window.__consAcc=[];
+  document.querySelectorAll('[data-accin]').forEach(el=>el.onclick=()=>{
+    const s=el.dataset.accin;
+    const i=window.__consAcc.indexOf(s);
+    if(i>=0){window.__consAcc.splice(i,1);el.style.background='';el.style.color='';el.style.borderColor='';}
+    else{window.__consAcc.push(s);el.style.background='var(--brand)';el.style.color='#fff';}
+    const o=$('#consAccOut');if(o)o.textContent=window.__consAcc.length?'已选：'+window.__consAcc.join('、'):'';
+  });
+  const sevEl=$('#consSev');
+  if(sevEl)sevEl.oninput=()=>{const l=$('#consSevLbl');if(l)l.textContent=sevEl.value;};
   let imgData='';
   const ib=$('#consImgBtn');
   if(ib)ib.onclick=()=>$('#consImg').click();
@@ -10899,14 +10922,19 @@ function openConsult(deptId,preDesc){
   const go=$('#consGo');
   if(go)go.onclick=()=>{
     const dept=$('#consDept').value;
-    const desc=$('#consDesc').value.trim();
+    let desc=$('#consDesc').value.trim();
     const dur=$('#consDur').value;
     if(!desc){toast('请描述症状');return;}
+    const part=($('#consPart')&&$('#consPart').value.trim())||'';
+    const sevN=($('#consSev')&&Number($('#consSev').value))||5;
+    const acc=window.__consAcc||[];
+    if(part)desc='部位：'+part+'。'+desc;
+    desc+='（难受程度 '+sevN+'/10'+(acc.length?'；伴随：'+acc.join('、'):'')+'）';
     const tr=triage(desc);
     const doc=DOCTOR_DB.filter(x=>x.dept===dept)[0];
     const cid='c'+Date.now();
     const useLLM=llmReady();
-    const item={id:cid,time:new Date().toLocaleString('zh-CN',{hour12:false}),dept:dept,desc:desc,dur:dur,img:imgData||'',sev:tr?tr.sev:'y',doc:doc?doc.name:'AI 医生',reply:useLLM?'⏳ AI 医生思考中…':genDocReply(dept,desc),status:useLLM?'AI回复中':'已回复',doctor:doc?doc.name:'AI 医生'};
+    const item={id:cid,time:new Date().toLocaleString('zh-CN',{hour12:false}),dept:dept,desc:desc,dur:dur,img:imgData||'',sev:tr?tr.sev:'y',doc:doc?doc.name:'AI 医生',reply:useLLM?'⏳ AI 医生思考中…':genDocReply(dept,desc),status:useLLM?'AI回复中':'已回复',doctor:doc?doc.name:'AI 医生',sevScale:sevN,acc:acc.slice(),level:''};
     const arr=docConsults();arr.unshift(item);docSaveConsults(arr);
     closeSheet();
     openConsultDetail(item);
@@ -10915,7 +10943,11 @@ function openConsult(deptId,preDesc){
     llmChat([{role:'system',content:docSysPrompt(docDeptName(dept))},{role:'user',content:'科室：'+docDeptName(dept)+'\n病程：'+dur+'\n症状描述：'+desc}])
       .then(ans=>{
         const list=docConsults();const it=list.find(x=>x.id===cid);
-        if(it){it.reply=ans;it.status='已回复';docSaveConsults(list);
+        if(it){
+          const lv=/【就医分级：\s*(红|黄|绿)/.exec(ans);
+          it.level=lv?(lv[1]==='红'?'red':lv[1]==='黄'?'yellow':'green'):'';
+          it.reply=it.level?ans.replace(/【就医分级：[^】]*】\s*/,''):ans;
+          it.status='已回复';docSaveConsults(list);
           /* 刷新已打开的详情 sheet */
           if($('#sheet')&&$('#sheet').classList.contains('open')&&$('#sheetTitle').textContent.includes('问诊'))openConsultDetail(it);
         }
@@ -10934,7 +10966,11 @@ function openConsult(deptId,preDesc){
 function openConsultHistory(){
   const arr=docConsults();
   let h='<div class="gtitle">📋 我的问诊（'+arr.length+'）</div>';
-  if(!arr.length)h+='<div class="fv empty">还没有问诊记录，点「图文问诊」发起第一次咨询</div>';
+  if(arr.length>1){
+    const oldest=arr[arr.length-1].time.slice(0,10),newest=arr[0].time.slice(0,10);
+    h+='<div class="card" style="background:var(--brand-light);"><div class="card-title">🗓 症状时间线</div><div style="font-size:12px;line-height:1.9;">'+arr.slice(0,6).slice().reverse().map(c=>'<div>'+esc(c.time.slice(5,10))+' · '+esc(c.desc.length>26?c.desc.slice(0,26)+'…':c.desc)+'</div>').join('')+'</div><div style="font-size:10.5px;color:var(--sub);margin-top:4px;">'+oldest+' 至 '+newest+' 共 '+arr.length+' 次 · 就诊时可直接给医生看</div></div>';
+  }
+  if(!arr.length)h+='<div class="fv empty">还没有问诊记录，点「AI 问诊」发起第一次咨询</div>';
   h+=arr.map(c=>{
     const m=SEV_META[c.sev]||SEV_META.y;
     return '<div class="list-item" data-histconsult="'+c.id+'" style="cursor:pointer;"><div class="li-head"><span class="t">'+docDeptIcon(c.dept)+' '+docDeptName(c.dept)+' · '+c.doc+'</span><span class="pill" style="background:'+m.bg+';color:'+m.c+';border:1px solid '+m.c+';">'+c.status+'</span></div>'+
@@ -10947,7 +10983,10 @@ function openConsultHistory(){
 /* 问诊详情 */
 function openConsultDetail(c){
   const m=SEV_META[c.sev]||SEV_META.y;
-  let h='<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><span style="font-weight:800;">'+docDeptIcon(c.dept)+' '+docDeptName(c.dept)+'</span><span class="pill" style="background:'+m.bg+';color:'+m.c+';border:1px solid '+m.c+';margin-left:auto;">'+c.status+'</span></div>';
+  const LV={red:{t:'🔴 尽快就医',c:'#c0392b',bg:'#FCEBEB'},yellow:{t:'🟡 择期门诊',c:'#b7791f',bg:'#FAEEDA'},green:{t:'🟢 居家观察',c:'#3B6D11',bg:'#EAF3DE'}};
+  let h='';
+  if(c.level&&LV[c.level])h+='<div style="background:'+LV[c.level].bg+';border:1px solid '+LV[c.level].c+';color:'+LV[c.level].c+';border-radius:12px;padding:10px 12px;font-weight:800;font-size:13.5px;margin-bottom:8px;">就医分级：'+LV[c.level].t.slice(2)+'</div>';
+  h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><span style="font-weight:800;">'+docDeptIcon(c.dept)+' '+docDeptName(c.dept)+'</span><span class="pill" style="background:'+m.bg+';color:'+m.c+';border:1px solid '+m.c+';margin-left:auto;">'+c.status+'</span></div>';
   h+='<div class="card"><div class="card-title">🙋 我的提问</div><div style="font-size:12.5px;line-height:1.7;">'+esc(c.desc)+'</div><div style="font-size:10.5px;color:var(--sub);margin-top:6px;">病程：'+c.dur+'　·　'+c.time+'</div>'+(c.img?'<img src="'+c.img+'" style="width:100%;max-height:200px;object-fit:cover;border-radius:10px;margin-top:8px;">':'')+'</div>';
   h+='<div class="card"><div class="card-title">👨‍⚕️ 医生回复（'+c.doc+'）</div><div style="font-size:12.5px;line-height:1.8;white-space:pre-wrap;">'+esc(c.reply)+'</div></div>';
   h+='<div style="display:flex;gap:6px;"><button class="btn ghost" data-again="'+c.id+'" style="flex:1;">🔄 重新咨询</button><button class="btn ghost" data-deldoc="'+c.id+'" style="flex:1;color:#c0392b;">🗑 删除记录</button></div>';
@@ -10957,33 +10996,289 @@ function openConsultDetail(c){
   const del=document.querySelector('[data-deldoc]');
   if(del)del.onclick=()=>{const arr=docConsults().filter(x=>x.id!==del.dataset.deldoc);docSaveConsults(arr);closeSheet();toast('已删除');};
 }
-/* 科室详情 */
-function openDeptDetail(id){
-  const d=DOC_DEPT_DB.find(x=>x.id===id);if(!d)return;
-  const docs=DOCTOR_DB.filter(x=>x.dept===id);
-  let h='<div class="gtitle">'+d.icon+' '+d.name+'科</div>';
-  h+='<div style="font-size:12px;color:var(--sub);margin-bottom:8px;">'+d.desc+'</div>';
-  h+='<div class="card"><div class="card-title">常见病症</div><div style="display:flex;flex-wrap:wrap;gap:6px;">'+d.diseases.map(x=>'<span class="pill">'+x+'</span>').join('')+'</div></div>';
-  h+='<div class="card"><div class="card-title">该科室医生</div><div style="display:flex;flex-direction:column;gap:8px;">'+(docs.length?docs.map(docCard).join(''):'<div class="fv empty">暂无示例医生</div>')+'</div></div>';
-  h+='<button class="btn primary" data-consdept="'+d.id+'" style="width:100%;">💬 咨询'+d.name+'科医生</button>';
-  openSheet('🏥 '+d.name+'科',h);
-  document.querySelectorAll('[data-doc]').forEach(el=>el.onclick=()=>{closeSheet();openDocDetail(el.dataset.doc);});
-  const cb=document.querySelector('[data-consdept]');
-  if(cb)cb.onclick=()=>{closeSheet();openConsult(d.id,'');};
+/* ================= 健康中心：档案 / 用药 / 预约 / 百科 / 红灯 ================= */
+const METRIC_DEFS=[
+  {id:'bp',n:'血压',unit:'mmHg',two:true,ref:'正常参考 90-139 / 60-89'},
+  {id:'weight',n:'体重',unit:'kg',ref:'BMI 健康 18.5-23.9'},
+  {id:'creat',n:'肌酐',unit:'μmol/L',ref:'参考 男 57-97 / 女 41-73'},
+  {id:'glu',n:'空腹血糖',unit:'mmol/L',ref:'参考 3.9-6.1'},
+  {id:'pro',n:'尿蛋白',unit:'g/24h',ref:'参考 < 0.15'},
+  {id:'hr',n:'静息心率',unit:'次/分',ref:'参考 60-100'}
+];
+function hWho(){return getGlobal('healthWho')||'me';}
+function hWhoName(w){return w==='me'?'本人':'家人';}
+function hMetrics(){return getGlobal('healthMetrics')||[];}
+function hMeds(){return getGlobal('meds')||[];}
+function hMedLog(){return getGlobal('medLog')||[];}
+function hAppts(){return getGlobal('appts')||[];}
+function todayStr(){const n=new Date();return n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0');}
+function nowHHMM(){const n=new Date();return String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0');}
+function medsDueNow(){
+  const today=todayStr(),hh=nowHHMM(),log=hMedLog();
+  return hMeds().filter(m=>(m.times||[]).some(t=>t<=hh&&!log.some(l=>l.medId===m.id&&l.date===today&&l.t===t)));
 }
-/* 绑定 */
-function bindDoctor(){
-  const c=$('#content');
-  c.querySelectorAll('[data-docact]').forEach(el=>el.onclick=()=>{
-    const a=el.dataset.docact;
-    if(a==='triage')openTriageSheet('');
-    else if(a==='consult')openConsult('','');
-    else if(a==='history')openConsultHistory();
-    else if(a==='dept')openDeptDetail(el.dataset.dept);
-    else if(a==='doctor')openDocDetail(el.dataset.doc);
-    else if(a==='llmcfg')openLlmSettings();
+function hBeep(){try{const ctx=ensureAudioCtx();if(!ctx)return;[0,0.28,0.56].forEach(dt=>{const o=ctx.createOscillator(),g=ctx.createGain();o.type='sine';o.frequency.value=880;o.connect(g);g.connect(ctx.destination);const t0=ctx.currentTime+dt;g.gain.setValueAtTime(0.0001,t0);g.gain.exponentialRampToValueAtTime(0.4,t0+0.03);g.gain.exponentialRampToValueAtTime(0.0001,t0+0.22);o.start(t0);o.stop(t0+0.24);});}catch(e){}}
+function hMedTick(){
+  const today=todayStr(),hh=nowHHMM();
+  if(!window.__medAlerted)window.__medAlerted={};
+  hMeds().forEach(m=>(m.times||[]).forEach(t=>{
+    if(t===hh){const key=m.id+'|'+today+'|'+t;
+      if(!window.__medAlerted[key]){window.__medAlerted[key]=1;
+        if(!hMedLog().some(l=>l.medId===m.id&&l.date===today&&l.t===t)){haptic(60);hBeep();toast('⏰ 服药提醒：'+m.name+'（'+(m.dose||'')+'）');if(cur&&cur.leaf==='doctor')render();}
+      }}}));
+  hAppts().forEach(a=>{
+    if(a.done||a.alerted===a.id+a.date+(a.time||''))return;
+    if(a.date===today&&a.time&&a.time===hh){a.alerted=a.id+a.date+(a.time||'');setGlobal('appts',hAppts());haptic(60);hBeep();toast('📅 就医提醒：'+a.hosp+(a.dept?' '+a.dept:'')+' '+(a.time||''));}
   });
-  c.querySelectorAll('[data-docdept]').forEach(el=>el.onclick=()=>{window.__docDeptTab=el.dataset.docdept==='all'?null:el.dataset.docdept;render();});
+}
+/* —— 健康档案 —— */
+function openHealthProfile(){
+  let who=hWho();
+  let selM=window.__hpMetric||'bp';
+  const draw=()=>{
+    const def=METRIC_DEFS.find(x=>x.id===selM)||METRIC_DEFS[0];
+    const recs=hMetrics().filter(r=>r.who===who&&r.type===def.id).sort((a,b)=>b.d.localeCompare(a.d));
+    let h='<div style="display:flex;gap:6px;margin-bottom:10px;">'+
+      ['me','fam'].map(w=>'<span class="ft'+(who===w?' active':'')+'" data-hwho="'+w+'" style="cursor:pointer;">'+hWhoName(w)+'</span>').join('')+'</div>';
+    /* 录入 */
+    h+='<div class="card"><div class="card-title">✏️ 记录'+def.n+'</div>';
+    h+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">'+METRIC_DEFS.map(m=>'<span class="pill" data-hmetric="'+m.id+'" style="cursor:pointer;'+(m.id===selM?'background:var(--brand);color:#fff;':'')+'">'+m.n+'</span>').join('')+'</div>';
+    h+='<div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap;">';
+    h+=def.two?'<input id="hmV1" class="inp" type="number" placeholder="收缩压" style="width:90px;"><input id="hmV2" class="inp" type="number" placeholder="舒张压" style="width:90px;">':'<input id="hmV1" class="inp" type="number" step="0.01" placeholder="数值（'+def.unit+'）" style="width:120px;">';
+    h+='<input id="hmDate" class="inp" type="date" value="'+todayStr()+'" style="width:150px;"><button class="btn primary sm" id="hmSave">保存</button></div>';
+    h+='<div style="font-size:10.5px;color:var(--sub);margin-top:6px;">'+def.ref+'（'+def.unit+'）· 记录仅供参考，异常值请咨询医生</div></div>';
+    /* 趋势图 */
+    h+='<div class="card"><div class="card-title">📈 '+def.n+'趋势（'+hWhoName(who)+'）</div>'+hChart(def,who)+'</div>';
+    /* 记录列表 */
+    h+='<div class="card"><div class="card-title">🗂 记录（'+recs.length+'）</div>';
+    h+=recs.length?recs.slice(0,12).map(r=>'<div class="list-item"><div class="li-head"><span class="t">'+r.d+'</span><span style="font-size:12px;font-weight:700;">'+(def.two?r.v1+'/'+r.v2:r.v1)+' '+def.unit+'</span></div>'+(r.note?'<div style="font-size:11px;color:var(--sub);">'+esc(r.note)+'</div>':'')+'<span class="pill" data-hdel="'+r.id+'" style="cursor:pointer;color:#c0392b;margin-top:4px;display:inline-block;">删除</span></div>').join(''):'<div class="fv empty">还没有记录，先记一笔</div>';
+    h+='</div>';
+    h+='<div style="font-size:10.5px;color:var(--sub);text-align:center;">数据仅存本机 localStorage，换设备用「我的 → 备份」迁移</div>';
+    openSheet('📈 健康档案',h);
+    document.querySelectorAll('[data-hwho]').forEach(el=>el.onclick=()=>{who=el.dataset.hwho;setGlobal('healthWho',who);window.__healthWho=who;draw();});
+    document.querySelectorAll('[data-hmetric]').forEach(el=>el.onclick=()=>{selM=el.dataset.hmetric;window.__hpMetric=selM;draw();});
+    const sv=$('#hmSave');
+    if(sv)sv.onclick=()=>{
+      const v1=Number($('#hmV1').value),v2=def.two?Number($('#hmV2').value):null;
+      const d=$('#hmDate').value||todayStr();
+      if(!v1||(def.two&&!v2)){toast('请填完整数值');return;}
+      const arr=hMetrics();arr.push({id:'m'+Date.now(),who:who,type:def.id,v1:v1,v2:v2,d:d});setGlobal('healthMetrics',arr);
+      toast('已记录 '+def.n);draw();
+    };
+    document.querySelectorAll('[data-hdel]').forEach(el=>el.onclick=()=>{setGlobal('healthMetrics',hMetrics().filter(r=>r.id!==el.dataset.hdel));toast('已删除');draw();});
+  };
+  draw();
+}
+function hChart(def,who){
+  const recs=hMetrics().filter(r=>r.who===who&&r.type===def.id).sort((a,b)=>a.d.localeCompare(b.d));
+  if(recs.length<2)return '<div class="fv empty" style="padding:14px;">记录不足 2 次，多记几次出趋势</div>';
+  const vals=recs.map(r=>def.two?[r.v1,r.v2]:[r.v1]);
+  let all=[];vals.forEach(v=>v.forEach(x=>all.push(x)));
+  const min=Math.min.apply(null,all),max=Math.max.apply(null,all),pad=(max-min)||1;
+  const W=320,H=120,L=34,R=8,T=12,B=20;
+  const X=i=>L+(W-L-R)*i/(recs.length-1);
+  const Y=v=>T+(H-T-B)*(1-(v-min)/pad);
+  let svg='<svg viewBox="0 0 '+W+' '+H+'" width="100%" style="background:#fff;border-radius:10px;">';
+  svg+='<text x="'+L+'" y="10" font-size="9" fill="#888">'+max.toFixed(1)+'</text><text x="'+L+'" y="'+(H-6)+'" font-size="9" fill="#888">'+min.toFixed(1)+'</text>';
+  svg+='<text x="'+(W-4)+'" y="'+(H-6)+'" font-size="9" fill="#888" text-anchor="end">'+recs[recs.length-1].d.slice(5)+'</text>';
+  svg+='<text x="'+L+'" y="'+(H-6)+'" font-size="9" fill="#888">'+recs[0].d.slice(5)+'</text>';
+  vals[0].forEach((_,li)=>{
+    const col=li===0?(def.two?'#c0392b':'#0F6E56'):'#185FA5';
+    const pts=recs.map((r,i)=>X(i).toFixed(1)+','+Y(vals[i][li]).toFixed(1)).join(' ');
+    svg+='<polyline points="'+pts+'" fill="none" stroke="'+col+'" stroke-width="2" stroke-linejoin="round"/>';
+    recs.forEach((r,i)=>{svg+='<circle cx="'+X(i).toFixed(1)+'" cy="'+Y(vals[i][li]).toFixed(1)+'" r="2.5" fill="'+col+'"/>';});
+  });
+  svg+='</svg>';
+  const last=recs[recs.length-1];
+  svg+='<div style="font-size:11.5px;margin-top:6px;">最新：'+(def.two?('收缩 <b style="color:#c0392b;">'+last.v1+'</b> / 舒张 <b style="color:#185FA5;">'+last.v2+'</b>'):('<b>'+last.v1+'</b> '+def.unit))+'　·　'+last.d+'</div>';
+  return svg;
+}
+/* —— 用药管家 —— */
+function openMeds(){
+  const today=todayStr();
+  const log=hMedLog();
+  const draw=()=>{
+    const lg=hMedLog();
+    let h='<button class="btn primary" id="medAdd" style="width:100%;margin-bottom:10px;">➕ 添加药品</button>';
+    const meds=hMeds();
+    if(!meds.length)h+='<div class="fv empty">还没添加药品。添加后可设服药时间，到点自动提醒。</div>';
+    meds.forEach(m=>{
+      const times=m.times||[];
+      const due=medsDueNow().some(x=>x.id===m.id);
+      h+='<div class="card'+(due?'" style="border:1px solid #f59e0b;background:#fff7ed;':'')+'"><div class="card-title">💊 '+esc(m.name)+(m.dose?' <span class="pill">'+esc(m.dose)+'</span>':'')+'<span style="font-size:10px;color:var(--sub);font-weight:400;margin-left:6px;">'+hWhoName(m.who||'me')+'</span></div>';
+      h+='<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">'+times.map(t=>{
+        const ok=lg.some(l=>l.medId===m.id&&l.date===today&&l.t===t);
+        return '<button class="btn sm'+(ok?' primary':'')+'" data-mlog="'+m.id+'|'+t+'" style="'+(ok?'':'color:var(--brand);border-color:var(--brand);')+'">'+(ok?'✅':'⬜')+' '+t+'</button>';
+      }).join('')+'</div>';
+      const week=hAdherence(m);
+      h+='<div style="font-size:10.5px;color:var(--sub);margin-top:6px;">近 7 天依从率：'+week.done+' / '+week.total+'（'+(week.total?Math.round(week.done*100/week.total):0)+'%）　·　<span data-mdel="'+m.id+'" style="color:#c0392b;cursor:pointer;">删除</span></div></div>';
+    });
+    h+='<div style="font-size:10.5px;color:var(--sub);margin-top:8px;">提醒需保持本页面处于打开状态；到点会响铃 + 弹提示。</div>';
+    openSheet('💊 用药管家',h);
+    const add=$('#medAdd');
+    if(add)add.onclick=()=>{
+      let h2='<label class="ef"><span>药品名 *</span><input id="mName" class="inp" placeholder="例：缬沙坦" style="width:100%;box-sizing:border-box;"></label>';
+      h2+='<label class="ef"><span>剂量说明</span><input id="mDose" class="inp" placeholder="例：80mg · 每日1次" style="width:100%;box-sizing:border-box;"></label>';
+      h2+='<label class="ef"><span>给谁吃</span><select id="mWho"><option value="me">本人</option><option value="fam">家人</option></select></label>';
+      h2+='<div class="ef"><span>服药时间（勾选）</span><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;">'+['06:00','08:00','12:00','14:00','18:00','20:00','22:00'].map(t=>'<span class="pill" data-mtime="'+t+'" style="cursor:pointer;">'+t+'</span>').join('')+'</div><div id="mTimesOut" style="font-size:11px;color:var(--brand);margin-top:4px;"></div></div>';
+      h2+='<button class="btn primary" id="mSave" style="width:100%;margin-top:8px;">保存</button>';
+      openSheet('➕ 添加药品',h2);
+      const sel=[];window.__mSel=sel;
+      document.querySelectorAll('[data-mtime]').forEach(el=>el.onclick=()=>{
+        const t=el.dataset.mtime;const i=sel.indexOf(t);
+        if(i>=0){sel.splice(i,1);el.style.background='';el.style.color='';}
+        else{sel.push(t);el.style.background='var(--brand)';el.style.color='#fff';}
+        sel.sort();const o=$('#mTimesOut');if(o)o.textContent=sel.length?'已选：'+sel.join('、'):'';
+      });
+      $('#mSave').onclick=()=>{
+        const name=$('#mName').value.trim();
+        if(!name){toast('请填药品名');return;}
+        if(!sel.length){toast('至少选一个服药时间');return;}
+        const arr=hMeds();arr.push({id:'md'+Date.now(),name:name,dose:$('#mDose').value.trim(),who:$('#mWho').value,times:sel.slice()});setGlobal('meds',arr);
+        closeSheet();toast('已添加 '+name);draw();
+      };
+    };
+    document.querySelectorAll('[data-mlog]').forEach(el=>el.onclick=()=>{
+      const p=el.dataset.mlog.split('|');
+      const lg2=hMedLog();
+      const ex=lg2.some(l=>l.medId===p[0]&&l.date===today&&l.t===p[1]);
+      if(ex){setGlobal('medLog',lg2.filter(l=>!(l.medId===p[0]&&l.date===today&&l.t===p[1])));toast('已取消打卡');}
+      else{lg2.push({medId:p[0],date:today,t:p[1],ts:Date.now()});setGlobal('medLog',lg2);haptic(15);toast('已打卡 '+p[1]);}
+      draw();
+    });
+    document.querySelectorAll('[data-mdel]').forEach(el=>el.onclick=()=>{
+      setGlobal('meds',hMeds().filter(m=>m.id!==el.dataset.mdel));toast('已删除');draw();
+    });
+  };
+  draw();
+}
+function hAdherence(m){
+  const log=hMedLog();let total=0,done=0;
+  for(let i=0;i<7;i++){
+    const d=new Date();d.setDate(d.getDate()-i);
+    const ds=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    (m.times||[]).forEach(t=>{total++;if(log.some(l=>l.medId===m.id&&l.date===ds&&l.t===t))done++;});
+  }
+  return {total:total,done:done};
+}
+/* —— 就诊准备 —— */
+function openAppts(){
+  const draw=()=>{
+    const arr=hAppts().slice().sort((a,b)=>(a.date+(a.time||'')).localeCompare(b.date+(b.time||'')));
+    let h='<button class="btn primary" id="apAdd" style="width:100%;margin-bottom:8px;">➕ 登记一次就医</button>';
+    h+='<button class="btn" id="apQ" style="width:100%;margin-bottom:10px;">🤖 AI 生成「问医生问题清单」</button>';
+    if(!arr.length)h+='<div class="fv empty">还没有就医安排。挂号后登记在这里，到点自动提醒。</div>';
+    const today=todayStr();
+    arr.forEach(a=>{
+      const past=a.date<today;
+      h+='<div class="card" style="'+(a.done?'opacity:.55;':'')+(past&&!a.done?'border:1px solid #f59e0b;':'')+'">'+
+        '<div class="card-title">'+(a.done?'✅':(past?'⚠️':'📅'))+' '+a.date+(a.time?' '+a.time:'')+'</div>'+
+        '<div style="font-size:13px;font-weight:700;">'+esc(a.hosp)+(a.dept?' · '+esc(a.dept):'')+(a.doc?' · '+esc(a.doc):'')+'</div>'+
+        (a.note?'<div style="font-size:11.5px;color:var(--sub);margin-top:4px;">'+esc(a.note)+'</div>':'')+
+        '<div style="display:flex;gap:8px;margin-top:8px;">'+(!a.done?'<span class="pill" data-adone="'+a.id+'" style="cursor:pointer;color:#3B6D11;">标记完成</span>':'')+'<span class="pill" data-adel="'+a.id+'" style="cursor:pointer;color:#c0392b;">删除</span></div></div>';
+    });
+    openSheet('📅 就诊准备',h);
+    const add=$('#apAdd');
+    if(add)add.onclick=()=>{
+      let h2='<label class="ef"><span>医院 *</span><input id="aHosp" class="inp" placeholder="例：市第一人民医院" style="width:100%;box-sizing:border-box;"></label>';
+      h2+='<label class="ef"><span>科室</span><input id="aDept" class="inp" placeholder="例：肾内科" style="width:100%;box-sizing:border-box;"></label>';
+      h2+='<label class="ef"><span>医生</span><input id="aDoc" class="inp" placeholder="选填" style="width:100%;box-sizing:border-box;"></label>';
+      h2+='<label class="ef"><span>日期 *</span><input id="aDate" class="inp" type="date" value="'+todayStr()+'" style="width:100%;box-sizing:border-box;"></label>';
+      h2+='<label class="ef"><span>时间</span><input id="aTime" class="inp" type="time" style="width:100%;box-sizing:border-box;"></label>';
+      h2+='<label class="ef"><span>备注（要办的事）</span><input id="aNote" class="inp" placeholder="例：带上周的化验单、空腹" style="width:100%;box-sizing:border-box;"></label>';
+      h2+='<button class="btn primary" id="aSave" style="width:100%;margin-top:8px;">保存</button>';
+      openSheet('➕ 登记就医',h2);
+      $('#aSave').onclick=()=>{
+        const hosp=$('#aHosp').value.trim(),d=$('#aDate').value;
+        if(!hosp||!d){toast('医院和日期必填');return;}
+        const arr2=hAppts();arr2.push({id:'ap'+Date.now(),hosp:hosp,dept:$('#aDept').value.trim(),doc:$('#aDoc').value.trim(),date:d,time:$('#aTime').value,note:$('#aNote').value.trim(),done:false});
+        setGlobal('appts',arr2);closeSheet();toast('已登记，到点会提醒');draw();
+      };
+    };
+    const q=$('#apQ');
+    if(q)q.onclick=openQuestions;
+    document.querySelectorAll('[data-adone]').forEach(el=>el.onclick=()=>{
+      const arr2=hAppts();const it=arr2.find(x=>x.id===el.dataset.adone);if(it)it.done=true;
+      setGlobal('appts',arr2);toast('已完成');draw();
+    });
+    document.querySelectorAll('[data-adel]').forEach(el=>el.onclick=()=>{
+      setGlobal('appts',hAppts().filter(x=>x.id!==el.dataset.adel));toast('已删除');draw();
+    });
+  };
+  draw();
+}
+/* —— AI 问医生问题清单 —— */
+function openQuestions(){
+  const lastC=docConsults()[0];
+  let h='<div class="gtitle">🤖 生成「该问医生的问题」</div>';
+  h+='<textarea id="qInput" class="inp" rows="3" placeholder="把病情/症状写这里，AI 帮你整理去医院要问的问题" style="width:100%;box-sizing:border-box;">'+esc(lastC?lastC.desc:'')+'</textarea>';
+  h+='<button class="btn primary" id="qGo" style="width:100%;margin-top:8px;">'+(llmReady()?'🤖 AI 生成清单':'生成通用清单（未接 AI）')+'</button>';
+  h+='<div id="qOut" style="margin-top:10px;"></div>';
+  const saved=getGlobal('qLists')||[];
+  if(saved.length){h+='<div class="card"><div class="card-title">🗂 保存过的清单</div>'+saved.slice(0,6).map(q=>'<div class="list-item" data-qold="'+q.id+'" style="cursor:pointer;"><div class="li-head"><span class="t">'+q.date+'</span></div><div style="font-size:11.5px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(q.text.split('\n')[0]||'')+'</div></div>').join('')+'</div>';}
+  openSheet('🤖 问题清单',h);
+  document.querySelectorAll('[data-qold]').forEach(el=>el.onclick=()=>{
+    const q=(getGlobal('qLists')||[]).find(x=>x.id===el.dataset.qold);
+    if(q)$('#qOut').innerHTML='<div class="card"><div style="font-size:12.5px;line-height:1.9;white-space:pre-wrap;">'+esc(q.text)+'</div></div>';
+  });
+  $('#qGo').onclick=()=>{
+    const t=$('#qInput').value.trim();
+    if(!t){toast('先写点病情描述');return;}
+    const out=$('#qOut');
+    out.innerHTML='<div style="text-align:center;padding:16px;color:var(--sub);font-size:12px;">⏳ 生成中…</div>';
+    const fallback='\n通用就诊问题清单（本地模板）：\n1. 我这个症状最可能是什么原因？\n2. 需要做哪些检查？各有什么风险？\n3. 严重程度如何？会不会影响肾/血压？\n4. 目前吃的药需要调整吗？\n5. 日常生活中要特别注意什么？\n6. 多久复查一次？复查哪些项目？\n7. 出现什么情况必须马上回来？';
+    const p=(llmReady()?llmChat([{role:'system',content:'你是就医助手。根据用户病情，生成去医院面诊时该问医生的 8-10 个问题，编号列出，覆盖：病因、检查、治疗、用药、生活方式、复查随访、危险信号。只输出问题清单，简洁实用。'},{role:'user',content:t}]).catch(()=>fallback):Promise.resolve(fallback));
+    p.then(txt=>{
+      out.innerHTML='<div class="card"><div class="card-title">📋 问医生清单</div><div style="font-size:12.5px;line-height:1.9;white-space:pre-wrap;">'+esc(txt)+'</div>'+
+        '<button class="btn ghost sm" id="qSaveTxt" style="width:100%;margin-top:8px;">💾 保存这份清单</button></div>';
+      $('#qSaveTxt').onclick=()=>{
+        const arr=getGlobal('qLists')||[];
+        arr.unshift({id:'q'+Date.now(),date:todayStr(),text:txt});
+        setGlobal('qLists',arr);toast('已保存');
+      };
+    });
+  };
+}
+/* —— 疾病百科 —— */
+const WIKI_GROUPS={focus:'⭐ 本人重点关注',cv:'🫀 心血管与代谢',meta:'🫀 心血管与代谢',dig:'🍽 消化系统',resp:'🫁 呼吸系统',urin:'💧 泌尿系统',neuro:'🧠 神经系统',other:'📚 其他'};
+function openMedicalWiki(kw){
+  kw=kw||window.__wikiKw||'';
+  window.__wikiKw=kw;
+  const entries=Object.entries(HEALTH_CONDITIONS).filter(([k,v])=>!kw||(v.name||'').includes(kw)||(v.principle||'').includes(kw)||(v.match||[]).some(m=>m.includes(kw)));
+  let h='<input class="inp" id="wikiKw" placeholder="🔍 搜索疾病 / 症状（如：血压、结石、血糖）" value="'+esc(kw)+'" style="width:100%;box-sizing:border-box;margin-bottom:10px;">';
+  if(!entries.length)h+='<div class="fv empty">没找到「'+esc(kw)+'」</div>';
+  const groups={};
+  entries.forEach(([k,v])=>{const g=v.group||'other';(groups[g]=groups[g]||[]).push([k,v]);});
+  Object.keys(groups).forEach(g=>{
+    h+='<div class="gtitle">'+(WIKI_GROUPS[g]||'📚 其他')+'</div>';
+    h+='<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:8px;">'+groups[g].map(([k,v])=>'<div class="grid-card" data-wiki="'+k+'" style="padding:10px;cursor:pointer;"><div style="font-size:22px;">'+(v.icon||'📖')+'</div><div style="font-weight:800;font-size:12px;margin-top:4px;">'+esc(v.name)+'</div></div>').join('')+'</div>';
+  });
+  openSheet('📚 疾病百科',h);
+  $('#wikiKw').oninput=e=>{clearTimeout(window.__wikiT);window.__wikiT=setTimeout(()=>openMedicalWiki(e.target.value.trim()),400);};
+  document.querySelectorAll('[data-wiki]').forEach(el=>el.onclick=()=>{
+    const v=HEALTH_CONDITIONS[el.dataset.wiki];if(!v)return;
+    let h2='<div style="text-align:center;margin-bottom:8px;"><span style="font-size:40px;">'+(v.icon||'📖')+'</span><div style="font-weight:800;font-size:15px;">'+esc(v.name)+'</div></div>';
+    if(v.risk)h2+='<div class="card"><div class="card-title">⚠️ 为什么要注意</div><div style="font-size:12.5px;line-height:1.9;">'+esc(v.risk)+'</div></div>';
+    if(v.principle)h2+='<div class="card"><div class="card-title">📌 管理原则</div><div style="font-size:12.5px;line-height:1.9;">'+esc(v.principle)+'</div></div>';
+    if(v.taboo&&v.taboo.length)h2+='<div class="card"><div class="card-title">🚫 忌口清单</div><div style="display:flex;flex-wrap:wrap;gap:6px;">'+v.taboo.map(t=>'<span class="pill" style="background:#FCEBEB;color:#A32D2D;">'+esc(t)+'</span>').join('')+'</div></div>';
+    if(v.recipes&&v.recipes.length)h2+='<div class="card"><div class="card-title">🥗 推荐食谱方向</div><div style="display:flex;flex-wrap:wrap;gap:6px;">'+v.recipes.map(t=>'<span class="pill" style="background:#EAF3DE;color:#3B6D11;">'+esc(t)+'</span>').join('')+'</div><div style="font-size:10.5px;color:var(--sub);margin-top:6px;">完整做法去「饮食」板块搜索</div></div>';
+    openSheet('📚 '+v.name,h2);
+  });
+}
+/* —— 红灯警示 —— */
+function openRedLight(){
+  const items=[
+    ['🫀 心血管急症',['胸痛压榨感/放射到左臂','呼吸困难、大汗','突发一侧无力/口角歪斜/言语不清（中风）','意识模糊或晕厥','血压 ≥180/120 伴头痛头晕']],
+    ['💧 多囊肾 / 肾相关',['剧烈腰痛或腰腹剧痛（可能结石梗阻/囊肿出血）','肉眼血尿（尿呈洗肉水/酱油色）','高热伴腰痛（可能感染）','尿量明显减少或无尿','血压骤升伴视物模糊']],
+    ['🍬 三高相关',['血糖 <3.9（心慌冷汗手抖）或 >16.7 伴恶心呕吐','糖尿病足破溃感染','剧烈头痛伴呕吐','视物突然模糊或眼前发黑']]
+  ];
+  let h='<button class="btn primary" data-call120="120" style="width:100%;background:#c0392b;border-color:#c0392b;margin-bottom:12px;">📞 立即拨打 120</button>';
+  items.forEach(([t,arr])=>{
+    h+='<div class="card"><div class="card-title">'+t+'</div>'+arr.map(x=>'<div style="font-size:12.5px;line-height:2;">🚨 '+esc(x)+'</div>').join('')+'</div>';
+  });
+  h+='<div style="font-size:10.5px;color:var(--sub);margin-top:8px;text-align:center;">出现以上任一信号 → 不要等、不要犹豫，立即就医或拨打 120</div>';
+  openSheet('🚨 危险信号',h);
+  document.querySelectorAll('[data-call120]').forEach(el=>el.onclick=()=>{location.href='tel:120';});
 }
 function openFoodPicker(mealIdx){
   const rec=getRec('diet',cur.date);const meal=rec.meals[mealIdx];
