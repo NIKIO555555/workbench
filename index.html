@@ -802,10 +802,9 @@
   .drv-txt{font-size:inherit;line-height:1.75;color:#222;word-break:break-word;overflow:hidden;height:100%;}
   .drv-pn{position:absolute;bottom:6px;left:0;right:0;text-align:center;font-size:10px;color:#aaa;}
   /* ===== 乐器乐谱（真实简谱渲染） ===== */
-  .sc-cover{height:118px;border-radius:12px 12px 0 0;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden;color:#fff;}
-  .sc-cover .sc-big{font-size:44px;font-weight:800;opacity:.95;letter-spacing:2px;text-shadow:0 2px 8px rgba(0,0,0,.25);}
-  .sc-cover .sc-ic{position:absolute;right:8px;top:6px;font-size:20px;opacity:.85;}
-  .sc-cover .sc-tag{position:absolute;left:8px;bottom:6px;font-size:10px;padding:2px 8px;border-radius:99px;background:rgba(255,255,255,.22);backdrop-filter:blur(2px);}
+  .sc-cover{height:118px;border-radius:12px 12px 0 0;position:relative;overflow:hidden;background:#fbf9f3;}
+  .sc-cover svg{display:block;width:100%;height:100%;}
+  .sc-cover .sc-tag{position:absolute;left:8px;bottom:6px;font-size:10px;padding:2px 8px;border-radius:99px;color:#fff;font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,.18);}
   .jp-box{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 8px;overflow-x:auto;margin-bottom:10px;}
   .jp-row{display:flex;align-items:flex-end;min-width:max-content;padding:6px 4px;}
   .jp-bar{display:flex;align-items:flex-end;border-right:1.5px solid var(--line);padding-right:6px;margin-right:6px;}
@@ -5605,16 +5604,125 @@ const INSTRUMENT_SHEETS={
   {id:'u5',t:'指弹小曲',composer:'改编',diff:'中级',cat:'指弹',key:'C',bpm:110,seed:405,note:'简单琶音指弹 pattern。'}
  ]
 };
-/* 乐谱：不再用随机占位图。公共领域曲目内置真实简谱（离线可看），
-   搜谱走 B站教学 / 全网搜索 / 百度图片（已验证可达）。 */
+/* 乐谱：封面 = 纸质五线谱样式（有简谱数据的曲子把真实旋律画上去，无旋律的用种子生成装饰音型）。
+   详情页：VexFlow 渲染真实五线谱（CDN 懒加载，失败回落简谱）；
+   吉他/尤克里里弹唱曲渲染和弦指法图。公共领域曲目内置真实旋律（离线可看），
+   版权曲目不内置完整谱（合法），提供和弦指法图 + 正版搜谱外链。 */
+const SHEET_KEYSHIFT={'C':0,'D':2,'E♭':3,'E':4,'F':5,'G':7,'A':9,'B♭':10,'B':11};
+function jpMidi(tok,key){
+  const m=String(tok).match(/^([0-7])(\.|')?/);if(!m)return null;
+  const iv=[0,2,4,5,7,9,11][+m[1]-1];
+  const oct=m[2]==='.'?-1:(m[2]==="'"?1:0);
+  return 60+(SHEET_KEYSHIFT[key]||0)+iv+12*oct;
+}
+function midiStaffY(m){
+  const o=Math.floor(m/12),c=m%12;
+  const dm={0:0,1:0,2:1,3:1,4:2,5:3,6:3,7:4,8:4,9:5,10:5,11:6};
+  const idx=o*7+dm[c];/* E4(midi64)=37 = 五线谱下加一线起算 */
+  return 82-(idx-37)*6;
+}
 function sheetCover(s){
-  const g={'入门':'linear-gradient(135deg,#2bbf6a,#1d9d5c)','初级':'linear-gradient(135deg,#3a9bdc,#2f7fc0)','中级':'linear-gradient(135deg,#e0a32e,#c9851d)','高级':'linear-gradient(135deg,#e0673a,#c04a24)','大师':'linear-gradient(135deg,#b14bd8,#8e2fb5)','考级':'linear-gradient(135deg,#7a6cf0,#5c4ed8)'}[s.diff]||'linear-gradient(135deg,#888,#666)';
-  const first=esc((s.t||'?').replace(/（.*）|\(.*\)/g,'').trim().charAt(0)||'🎼');
-  const keyStr=s.key?('· '+esc(s.key)):'';
-  return '<div class="sc-cover" style="background:'+g+';">'+
-    '<div class="sc-ic">🎼</div>'+
-    '<div class="sc-big">'+first+'</div>'+
-    '<div class="sc-tag">'+esc(s.diff)+keyStr+'</div></div>';
+  const ac={'入门':'#2bbf6a','初级':'#3a9bdc','中级':'#e0a32e','高级':'#e0673a','大师':'#b14bd8','考级':'#7a6cf0'}[s.diff]||'#888';
+  const keyStr=s.key?(' · '+esc(s.key)):'';
+  let pts=[];
+  if(s.jp)String(s.jp).replace(/\|/g,' ').trim().split(/\s+/).filter(Boolean).slice(0,7).forEach(function(t){const m=jpMidi(t,s.key);if(m!==null)pts.push(m);});
+  if(pts.length<4){ /* 无内置旋律：种子生成装饰音型（五声音阶，保证落在谱内） */
+    let seed=(s.seed||1)>>>0;const rnd=function(){seed=(seed*1103515245+12345)>>>0;return (seed>>>16)/65536;};
+    const pent=[60,62,64,67,69,72,74,76];pts=[];
+    for(let i=0;i<6;i++)pts.push(pent[Math.floor(rnd()*pent.length)]);
+  }
+  let notes='';const xs=18,step=26;
+  pts.forEach(function(m,i){
+    const y=midiStaffY(m);if(y<24||y>96)return;const x=xs+i*step;
+    if(y>=94)notes+='<line x1="'+(x-7)+'" y1="'+y+'" x2="'+(x+7)+'" y2="'+y+'" stroke="#8f9aa8" stroke-width="1"/>';
+    notes+='<line x1="'+(x+5.5)+'" y1="'+y+'" x2="'+(x+5.5)+'" y2="'+(y-24)+'" stroke="#3a4353" stroke-width="1.3"/>'+
+      '<ellipse cx="'+x+'" cy="'+y+'" rx="5.2" ry="3.8" fill="#2c3444" transform="rotate(-18 '+x+' '+y+')"/>';
+  });
+  let lines='';for(let i=0;i<5;i++)lines+='<line x1="10" y1="'+(34+i*12)+'" x2="190" y2="'+(34+i*12)+'" stroke="#8f9aa8" stroke-width="1"/>';
+  return '<div class="sc-cover">'+
+    '<svg viewBox="0 0 200 118" preserveAspectRatio="xMidYMid slice">'+
+      '<rect width="200" height="118" fill="#fbf9f3"/>'+
+      '<rect width="200" height="3" fill="'+ac+'"/>'+
+      lines+
+      '<line x1="188" y1="34" x2="188" y2="82" stroke="#3a4353" stroke-width="2"/>'+
+      '<line x1="192.5" y1="34" x2="192.5" y2="82" stroke="#3a4353" stroke-width="1"/>'+
+      notes+
+    '</svg>'+
+    '<div class="sc-tag" style="background:'+ac+';">'+esc(s.diff)+keyStr+'</div></div>';
+}
+/* ===== VexFlow 真实五线谱渲染（CDN 懒加载，失败回落简谱） ===== */
+let __vexP=null;
+function loadVexFlow(){
+  if(window.Vex&&window.Vex.Flow)return Promise.resolve(window.Vex);
+  if(__vexP)return __vexP;
+  __vexP=new Promise(function(res,rej){
+    var s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/vexflow@4.2.2/build/cjs/vexflow.js';
+    s.onload=function(){if(window.Vex&&window.Vex.Flow)res(window.Vex);else{__vexP=null;rej(new Error('引擎异常'));}};
+    s.onerror=function(){__vexP=null;rej(new Error('网络不可用，无法加载五线谱引擎'));};
+    document.head.appendChild(s);
+  });
+  return __vexP;
+}
+function jpToVexNotes(jp,key){
+  const out=[];
+  String(jp).split('|').forEach(function(bar){
+    bar.trim().split(/\s+/).filter(Boolean).forEach(function(tok){
+      const m=String(tok).match(/^([0-7])(\.|')?([_]{1,2})?(-{1,2})?$/);if(!m)return;
+      const midi=jpMidi(tok,key);if(midi===null)return;
+      const names=['c','c#','d','d#','e','f','f#','g','g#','a','a#','b'];
+      let dur=m[3]==='__'?'16':(m[3]==='_'?'8':'q');
+      if(m[4])dur=m[4].length===1?'h':'w';
+      out.push({k:names[midi%12]+'/'+(Math.floor(midi/12)-1),d:dur});
+    });
+  });
+  return out;
+}
+function renderStaffScore(mountId,s){
+  const el=document.getElementById(mountId);if(!el)return;
+  const notes=jpToVexNotes(s.jp,s.key);
+  if(!notes.length){el.innerHTML='<div class="fv" style="font-size:12px;color:var(--sub);">该曲暂无内置旋律</div>';return;}
+  loadVexFlow().then(function(Vex){
+    if(!document.getElementById(mountId))return;
+    el.innerHTML='';
+    const W=Math.max(300,Math.min(660,(el.clientWidth||340)));
+    const perLine=8,lineH=110;
+    const H=Math.ceil(notes.length/perLine)*lineH+16;
+    const renderer=new Vex.Flow.Renderer(el,Vex.Flow.Renderer.Backends.SVG);
+    renderer.resize(W,H);const ctx=renderer.getContext();
+    const ks=s.key&&s.key!=='C'?s.key.replace('♯','#').replace('♭','b'):'C';
+    for(let i=0;i<notes.length;i+=perLine){
+      const row=notes.slice(i,i+perLine);
+      const stave=new Vex.Flow.Stave(0,16+i/perLine*lineH,W-8);
+      if(i===0){stave.addClef('treble');stave.addKeySignature(ks);stave.addTimeSignature('4/4');}
+      stave.setContext(ctx).draw();
+      const sn=row.map(function(n){return new Vex.Flow.StaveNote({keys:[n.k],duration:n.d});});
+      Vex.Flow.Formatter.FormatAndDraw(ctx,stave,sn);
+    }
+  }).catch(function(){
+    el.innerHTML='<div class="fv" style="font-size:12px;color:var(--sub);">五线谱引擎加载失败（需联网），请看下方简谱。</div>';
+  });
+}
+/* ===== 吉他 / 尤克里里 和弦指法图（数字=品位，○=空弦，✕=不弹） ===== */
+const GTR_CHORDS={C:'x32010',G:'320003',Am:'x02210',Em:'022000',F:'133211',D:'xx0232',A:'x02220',E:'022100',Dm:'xx0231',Bm:'x24432',Em7:'022030',Cadd9:'x32033',Dsus4:'xx0233','F#m':'244222',Cmaj7:'x32000',G7:'320001'};
+const UKE_CHORDS={C:'0003',G:'0232',Am:'2000',F:'2010',Dm:'2210',Em:'0432',D:'2220',Em7:'0202',Am7:'0000',G7:'0212'};
+function chordDiagramHtml(ch,instr){
+  const tab=(instr==='study_ukulele'?UKE_CHORDS[ch]:GTR_CHORDS[ch])||null;
+  const n=tab?tab.length:6;
+  const sx=10,topY=18,fretH=13,fr=5,pad=9;
+  const W=(n-1)*sx+pad*2,H=topY+fr*fretH+8;
+  let g='';
+  for(let j=0;j<=fr;j++)g+='<line x1="'+pad+'" y1="'+(topY+j*fretH)+'" x2="'+(pad+(n-1)*sx)+'" y2="'+(topY+j*fretH)+'" stroke="'+(j===0?'#5a6472':'#9aa4b0')+'" stroke-width="'+(j===0?'3':'1')+'"/>';
+  for(let i=0;i<n;i++)g+='<line x1="'+(pad+i*sx)+'" y1="'+topY+'" x2="'+(pad+i*sx)+'" y2="'+(topY+fr*fretH)+'" stroke="#9aa4b0" stroke-width="1"/>';
+  if(tab){
+    tab.split('').forEach(function(c,i){
+      const x=pad+i*sx;
+      if(c==='x')g+='<text x="'+x+'" y="'+(topY-6)+'" font-size="8" fill="#9aa4b0" text-anchor="middle">✕</text>';
+      else if(c==='0')g+='<circle cx="'+x+'" cy="'+(topY-9)+'" r="3.2" fill="none" stroke="#8f9aa8" stroke-width="1.2"/>';
+      else{const f=+c;g+='<circle cx="'+x+'" cy="'+(topY+(f-0.5)*fretH)+'" r="4.2" fill="#3a6fdc"/><text x="'+x+'" y="'+(topY+(f-0.5)*fretH+2.6)+'" font-size="6.5" fill="#fff" text-anchor="middle">'+f+'</text>';}
+    });
+  }
+  return '<svg viewBox="0 0 '+W+' '+H+'" width="'+W+'" height="'+H+'">'+g+'</svg>';
 }
 function jpNote(tok){
   // 格式：数字[低音点|高音撇][下划线(八分)或双减号(十六分)][-延音]
@@ -5764,16 +5872,22 @@ function openSheetDetail(sid){
     '<span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--input);color:var(--sub);">♩ '+s.bpm+' BPM</span></div>';
   html+='</div>';
   if(s.jp){
-    html+='<div class="card" style="margin-bottom:10px;"><div class="card-title">🎼 内置简谱（'+esc(s.t)+'）</div>'+jpRender(s.jp)+
+    html+='<div class="card" style="margin-bottom:10px;"><div class="card-title">🎼 五线谱（'+esc(s.t)+'）</div>'+
+      '<div class="card-sub">真实五线谱 · 首次打开需联网加载记谱引擎</div>'+
+      '<div id="staffScore" style="width:100%;overflow-x:auto;padding-bottom:4px;"></div></div>';
+    html+='<div class="card" style="margin-bottom:10px;"><div class="card-title">🔢 简谱（'+esc(s.t)+'）</div>'+jpRender(s.jp)+
       '<div class="jp-meta">· 数字 1–7 = do–si · 数字下点 = 低八度 · 数字上点 = 高八度 · 下划线 = 八分音符 · 横线 = 延长</div></div>';
   }else{
-    html+='<div class="card" style="margin-bottom:10px;"><div class="card-title">🎼 乐谱</div>'+
-      '<div class="fv" style="line-height:1.8;">这首是受版权保护的现代曲目，工作台<b>不能</b>直接内置完整五线谱/简谱图片（版权风险）。下方提供多个正版外链，点击即可在浏览器查看或下载对应乐谱。</div></div>';
+    html+='<div class="card" style="margin-bottom:10px;"><div class="card-title">🎼 完整乐谱</div>'+
+      '<div class="fv" style="line-height:1.8;">这首是受版权保护的现代曲目，工作台<b>不能</b>直接内置完整五线谱/简谱图片（版权风险）。'+(s.chords?'下方已提供该曲的<b>和弦指法图 + 节奏型</b>（和弦进行不受版权保护），足够弹唱伴奏。':'')+'完整曲谱请用下方正版外链查看。</div></div>';
   }
   if(s.chords){
-    html+='<div class="card" style="margin-bottom:10px;"><div class="card-title">🎸 弹唱和弦谱</div>'+
-      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">'+s.chords.split(/\s+/).map(function(ch){return '<span style="font-size:13px;font-weight:700;padding:5px 12px;border-radius:99px;background:var(--brand-light);color:var(--brand);border:1px solid var(--brand);">'+ch+'</span>';}).join('')+'</div>'+
-      '<div class="fv" style="font-size:11px;">和弦循环弹奏即可伴奏弹唱，具体指法可在下方链接搜索曲名教学。</div></div>';
+    const isUke=cur.leaf==='study_ukulele';
+    html+='<div class="card" style="margin-bottom:10px;"><div class="card-title">'+(isUke?'🪕 尤克里里和弦指法图':'🎸 吉他和弦指法图')+'</div>';
+    html+='<div style="display:flex;gap:10px;flex-wrap:wrap;">'+s.chords.split(/\s+/).map(function(ch){
+      return '<div style="text-align:center;"><div style="border:1px solid var(--line);border-radius:10px;padding:6px 5px 3px;display:inline-block;">'+chordDiagramHtml(ch,cur.leaf)+'</div><div style="font-size:11px;font-weight:700;margin-top:4px;">'+esc(ch)+'</div></div>';
+    }).join('')+'</div>';
+    html+='<div class="fv" style="font-size:11px;margin-top:8px;">数字=品位，○=空弦，✕=不弹。'+(isUke?'':'弹唱节奏型建议：<b>↓ ↓↑ ↑↓↑</b>（慢速练稳再加速）。')+'完整六线谱/五线谱见下方搜谱链接。</div></div>';
   }
   if(s.note)html+='<div class="card" style="margin-bottom:10px;"><div class="card-title">练习建议</div><div class="fv" style="line-height:1.8;">'+esc(s.note)+'</div></div>';
   html+='<div class="card" style="margin-bottom:10px;"><div class="card-title">🔗 查找乐谱 / 图片谱</div>';
@@ -5782,10 +5896,13 @@ function openSheetDetail(sid){
   html+='<div class="fv" style="font-size:11px;color:var(--sub);line-height:1.6;">提示：百度图片搜谱可直接看到网友分享的曲谱图片；B站有大量教学视频。若搜不到，说明该曲未公开分享或存在版权限制。</div></div>';
   html+='<button class="btn primary" id="sheetMetro" style="width:100%;margin-bottom:8px;">🎵 用节拍器练这首（'+s.bpm+' BPM）</button>';
   openSheet('乐谱：'+s.t,html);
+  if(s.jp)requestAnimationFrame(function(){renderStaffScore('staffScore',s);});
+  const label=INSTRUMENT_META[cur.leaf].label;
+  const sheetWord=cur.leaf==='study_guitar'?'吉他谱 六线谱 TAB':(cur.leaf==='study_ukulele'?'尤克里里谱 四线谱':'钢琴谱 五线谱');
   const bm=$('#sheetMetro');if(bm)bm.onclick=function(){window.__metroBpm=s.bpm;window.__metroBeats=4;window.__instTab='metro';closeSheet();render();};
-  const bb=$('#sheetBili');if(bb)bb.onclick=function(){window.open('https://search.bilibili.com/all?keyword='+encodeURIComponent(s.t+' '+INSTRUMENT_META[cur.leaf].label+' 教学'),'_blank');};
-  const bw=$('#sheetWeb');if(bw)bw.onclick=function(){window.open('https://www.baidu.com/s?wd='+encodeURIComponent(s.t+' '+INSTRUMENT_META[cur.leaf].label+' 简谱 五线谱'),'_blank');};
-  const bi=$('#sheetImgBaidu');if(bi)bi.onclick=function(){window.open('https://image.baidu.com/search/index?tn=baiduimage&word='+encodeURIComponent(s.t+' '+INSTRUMENT_META[cur.leaf].label+' 简谱'),'_blank');};
+  const bb=$('#sheetBili');if(bb)bb.onclick=function(){window.open('https://search.bilibili.com/all?keyword='+encodeURIComponent(s.t+' '+label+' 教学'),'_blank');};
+  const bw=$('#sheetWeb');if(bw)bw.onclick=function(){window.open('https://www.baidu.com/s?wd='+encodeURIComponent(s.t+' '+sheetWord),'_blank');};
+  const bi=$('#sheetImgBaidu');if(bi)bi.onclick=function(){window.open('https://image.baidu.com/search/index?tn=baiduimage&word='+encodeURIComponent(s.t+' '+sheetWord),'_blank');};
 }
 /* 节拍器引擎 */
 let metro={ctx:null,running:false,timer:null,next:0,beat:0,bpm:100,beats:4};
