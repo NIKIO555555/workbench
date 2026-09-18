@@ -10233,21 +10233,26 @@ function renderSport(){
     '<div style="flex:1;"><div style="font-size:20px;font-weight:900;color:var(--brand);">'+streak+'</div><div style="font-size:11px;color:var(--sub);">连续运动(天)</div></div></div>'+
     '<div style="display:flex;gap:8px;margin-top:10px;align-items:center;"><span style="font-size:12px;color:var(--sub);">⚖️ 今日体重</span><input class="inp" id="sportWeight" type="number" step="0.1" placeholder="kg" value="'+(rec.weight||'')+'" style="width:90px;"><button class="btn sm" id="sportWSave">记录</button>'+
     (rec.weight?'<span style="font-size:12px;color:var(--brand);font-weight:700;">'+rec.weight+' kg</span>':'')+'</div></div>';
-  /* 肾病安全提示（基于用户档案：双侧多囊肾+肾结石）——默认折叠，保护隐私 */
+  /* 运动安全提示（隐私版）：常驻层=通用小贴士（人人可见，不暴露任何档案信息）；
+     个性化肾病建议隐藏：仅当档案含相关条件时，长按卡片标题 800ms 解锁显示。
+     卡片标题/外观与普通用户完全一致，他人看到无法推断健康状况。 */
   const prof=userProfile();
-  if(prof.conds&&(prof.conds.includes('pkd')||prof.conds.includes('kidney_stone'))){
-    h+='<div class="card" style="background:rgba(229,57,53,.05);border:1px solid rgba(229,57,53,.2);">'+
-      '<div data-ssafe="1" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;">'+
-      '<div class="card-title" style="margin:0;color:#e53935;">⚠️ 运动安全提示</div>'+
-      '<span style="font-size:12px;color:var(--sub);">'+(window.__sportSafeOpen?'收起 ▲':'展开 ▼')+'</span></div>'+
-      (window.__sportSafeOpen?'<div style="font-size:12px;line-height:1.8;color:var(--sub);margin-top:6px;">'+
-        '你的档案显示<b>双侧多囊肾+肾结石</b>，运动需注意：<br>'+
-        '🚫 <b>避免</b>：拳击/足球/篮球等<b>身体对抗和撞击性运动</b>（囊肿破裂风险）；大重量深蹲/硬拉等<b>极限负重</b>（腹压骤升压迫肾脏）；<br>'+
-        '✅ <b>推荐</b>：快走/慢跑（中等配速）/游泳/瑜伽/太极/骑车——中低强度有氧，每次 30-45 分钟；<br>'+
-        '💧 运动前后充分<b>补水</b>（肾结石患者尤其重要，保证尿量 2000ml+/天）；<br>'+
-        '🔴 出现腰部剧痛/血尿/发热立即停止运动并就医。'+
-      '</div>':'')+'</div>';
-  }
+  const _ssPK=prof.conds&&(prof.conds.includes('pkd')||prof.conds.includes('kidney_stone'));
+  h+='<div class="card"><div data-stips="1" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;">'+
+    '<div class="card-title" style="margin:0;">💡 运动小贴士</div>'+
+    '<span style="font-size:12px;color:var(--sub);">'+(window.__sportTipsOpen?'收起 ▲':'展开 ▼')+'</span></div>'+
+    (window.__sportTipsOpen?'<div style="font-size:12px;line-height:1.8;color:var(--sub);margin-top:6px;">'+
+      '🔸 运动前热身 5 分钟，运动后拉伸放松；<br>'+
+      '🔸 循序渐进，感觉不适立即降低强度或停止；<br>'+
+      '🔸 运动前后适量补水，少量多次；<br>'+
+      '🔸 规律比强度更重要，每周 3-5 次中低强度即可。'+
+    '</div>':'')+
+    (window.__sportSafeOpen&&_ssPK?'<div style="font-size:12px;line-height:1.8;color:var(--sub);margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);">'+
+      '🚫 <b>避免</b>：拳击/足球/篮球等<b>身体对抗和撞击性运动</b>（囊肿破裂风险）；大重量深蹲/硬拉等<b>极限负重</b>（腹压骤升压迫肾脏）；<br>'+
+      '✅ <b>推荐</b>：快走/慢跑（中等配速）/游泳/瑜伽/太极/骑车——中低强度有氧，每次 30-45 分钟；<br>'+
+      '💧 运动前后充分<b>补水</b>（尤其重要，保证尿量 2000ml+/天）；<br>'+
+      '🔴 出现腰部剧痛/血尿/发热立即停止运动并就医。'+
+    '</div>':'')+'</div>';
   h+='<div class="card"><div class="card-title">📒 今日运动记录 <span class="r">'+exs.length+' 项</span></div>';
   if(!exs.length)h+='<div class="fv empty">还没运动，从下面课程库挑一个开始吧 💪</div>';
   exs.forEach((e,i)=>{h+='<div class="list-item"><div class="li-head"><span class="t">'+esc(e.name)+'</span><button class="li-del" data-exdel="'+i+'">删除</button></div><div style="font-size:11px;color:var(--sub);">'+(e.mins||0)+' 分钟 · 消耗 '+(e.kcal||0)+' kcal'+(e.part?' · '+esc(e.part):'')+'</div></div>';});
@@ -12711,7 +12716,20 @@ function bindSleep(){
 /* 运动绑定 */
 function bindSport(){
   const c=$('#content');
-  c.querySelectorAll('[data-ssafe]').forEach(el=>el.onclick=()=>{window.__sportSafeOpen=!window.__sportSafeOpen;render();});
+  /* 运动小贴士：点击=展开通用贴士；长按 800ms=解锁个性化安全建议（隐私设计，不提示长按手势） */
+  c.querySelectorAll('[data-stips]').forEach(el=>{
+    let lpTimer=null,lpFired=false;
+    el.addEventListener('pointerdown',()=>{
+      lpFired=false;
+      lpTimer=setTimeout(()=>{lpTimer=null;lpFired=true;
+        if(userProfile().conds&&(userProfile().conds.includes('pkd')||userProfile().conds.includes('kidney_stone'))){
+          window.__sportSafeOpen=!window.__sportSafeOpen;if(window.haptic)haptic(20);render();
+        }
+      },800);
+    });
+    ['pointerup','pointerleave','pointercancel'].forEach(ev=>el.addEventListener(ev,()=>{if(lpTimer){clearTimeout(lpTimer);lpTimer=null;}}));
+    el.onclick=()=>{if(lpFired){lpFired=false;return;}window.__sportTipsOpen=!window.__sportTipsOpen;render();};
+  });
   c.querySelectorAll('[data-course]').forEach(el=>el.onclick=()=>{
     const cs=SPORT_COURSES[Number(el.dataset.course)];
     const rec=getRec('sport',cur.date);rec.exercises=rec.exercises||[];
