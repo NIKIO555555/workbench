@@ -972,14 +972,86 @@ const KEY='wb_v5';
 let store=load();
 function load(){try{return JSON.parse(localStorage.getItem(KEY))||{};}catch(e){return{};}}
 function save(){
-  try{localStorage.setItem(KEY,JSON.stringify(store));}
+  try{
+    /* 照片/视频等大字段自动外置到 IndexedDB，主库只存引用（否则 5MB 配额必爆，数据假性丢失） */
+    const txt=JSON.stringify(store,function(k,v){
+      if(typeof v==='string'&&v.startsWith('data:')&&v.length>MEXT_MIN){
+        let id=MEXT_IDS.get(v);
+        if(!id){id='m'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);MEXT_IDS.set(v,id);mextPut(v,id);}
+        return 'idb:'+id;
+      }
+      return v;
+    });
+    localStorage.setItem(KEY,txt);
+  }
   catch(e){
     /* 配额超限紧急自救：历史备份快照是最大占用，先清空再重试 */
-    try{store.backups=[];localStorage.setItem(KEY,JSON.stringify(store));toast('存储已满，已清理历史备份腾出空间，请尽快「📦 大备份」到文件');}
+    try{store.backups=[];localStorage.setItem(KEY,JSON.stringify(store,function(k,v){return (typeof v==='string'&&v.startsWith('data:')&&v.length>MEXT_MIN)?'idb:'+(MEXT_IDS.get(v)||'lost'):v;}));toast('存储已满，已清理历史备份腾出空间，请尽快「📦 大备份」到文件');}
     catch(e2){toast('保存失败：本地存储已满，请立即「📦 大备份」后清理照片');}
   }
   try{autoSyncKick();}catch(e){}
 }
+/* ===== 媒体外置存储层：图片/视频本体存 IndexedDB(wb_imgs)，内存持有真实数据 ===== */
+const MEXT_MIN=20000;
+const MEXT_IDS=new Map(); /* dataURL -> id 去重 */
+const MEDIA_CACHE={};     /* id -> dataURL */
+let _mextDbP=null;
+function mextOpen(){
+  if(_mextDbP)return _mextDbP;
+  _mextDbP=new Promise(res=>{
+    try{const rq=indexedDB.open('wb_imgs',1);
+      rq.onupgradeneeded=e=>{const db=e.target.result;if(!db.objectStoreNames.contains('img'))db.createObjectStore('img',{keyPath:'id'});};
+      rq.onsuccess=e=>res(e.target.result);rq.onerror=()=>res(null);
+    }catch(e){res(null);}
+  });
+  return _mextDbP;
+}
+function mextPut(data,id){
+  id=id||('m'+Date.now().toString(36)+Math.random().toString(36).slice(2,7));
+  MEDIA_CACHE[id]=data;
+  return mextOpen().then(db=>new Promise(res=>{
+    if(!db)return res(id);
+    try{const tx=db.transaction('img','readwrite');tx.objectStore('img').put({id:id,data:data});tx.oncomplete=()=>res(id);tx.onerror=()=>res(id);}catch(e){res(id);}
+  })).catch(()=>id);
+}
+function mextDel(id){delete MEDIA_CACHE[id];return mextOpen().then(db=>new Promise(res=>{if(!db)return res();try{const tx=db.transaction('img','readwrite');tx.objectStore('img').delete(id);tx.oncomplete=res;tx.onerror=res;}catch(e){res();}})).catch(()=>{});}
+function mextAll(){return mextOpen().then(db=>new Promise(res=>{if(!db)return res([]);try{const rq=db.transaction('img','readonly').objectStore('img').getAll();rq.onsuccess=()=>res(rq.result||[]);rq.onerror=()=>res([]);}catch(e){res([]);}})).catch(()=>[]);}
+const _mextId=()=>'m'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+/* 启动水合：磁盘令牌 → 内存真实数据；旧版长 data: 字符串自动迁移外置 */
+async function mediaHydrate(){
+  let missing=0,migrated=0;
+  try{const all=await mextAll();all.forEach(r=>{MEDIA_CACHE[r.id]=r.data;});}catch(e){}
+  const walk=o=>{
+    Object.keys(o||{}).forEach(k=>{
+      const v=o[k];
+      if(typeof v==='string'){
+        if(v.startsWith('idb:')){
+          const d=MEDIA_CACHE[v.slice(4)];
+          if(d)o[k]=d;else missing++;
+        }else if(v.startsWith('data:')&&v.length>MEXT_MIN){
+          let id=MEXT_IDS.get(v);
+          if(!id){id=_mextId();MEXT_IDS.set(v,id);mextPut(v,id);}
+          o[k]='idb:'+id;migrated++; /* 先换成令牌，下面再从缓存水合回内存 */
+        }
+      }else if(v&&typeof v==='object')walk(v);
+    });
+  };
+  walk(store);
+  walk(store); /* 第二遍：把刚写入的 idb: 令牌水合回真实数据（缓存已就绪） */
+  if(migrated){try{save();}catch(e){}}
+  if(missing>0)setTimeout(()=>toast('⚠️ 有 '+missing+' 张图片的媒体文件缺失（浏览器数据曾被清理）'),3000);
+  /* 孤儿回收：磁盘引用里不存在的 IDB 记录清掉 */
+  try{
+    const raw=localStorage.getItem(KEY)||'';
+    const ref=new Set();
+    (raw.match(/idb:m[0-9a-z]+/g)||[]).forEach(t=>ref.add(t.slice(4)));
+    if(ref.size){
+      const all=await mextAll();
+      all.forEach(r=>{if(!ref.has(r.id))mextDel(r.id);});
+    }
+  }catch(e){}
+}
+function applySnapshot(snap){if(!snap)return 0;let n=0;Object.keys(snap).forEach(k=>{if(k.startsWith('wb_')){localStorage.setItem(k,snap[k]);n++;}});store=load();SETTINGS=loadTheme();mediaHydrate().then(()=>{try{render();}catch(e){}}).catch(()=>{});return n;}
 function getRec(mod,date){return(store[mod]&&store[mod][date])||null;}
 function setRec(mod,date,val){store[mod]=store[mod]||{};store[mod][date]=val;save();}
 function datesOf(mod){return Object.keys(store[mod]||{}).sort().reverse();}
@@ -4763,7 +4835,7 @@ function importData(){
         const obj=JSON.parse(r.result);
         if(obj.type==='workbench_full_v2'){
           const st=obj.idb||{};
-          let ph='<div style="font-size:12px;color:var(--sub);line-height:2;margin-bottom:8px;">检测到 <b>大备份</b>（'+String(obj.ts||'').slice(0,19).replace('T',' ')+')<br>📊 数据项：'+Object.keys(obj.data||{}).length+' 项<br>🎵 曲库音频：'+(st.bgm||[]).length+' 首<br>🎙 录音：'+(st.media||[]).length+' 条<br>📖 小说：'+(st.novel||[]).length+' 本</div>';
+          let ph='<div style="font-size:12px;color:var(--sub);line-height:2;margin-bottom:8px;">检测到 <b>大备份</b>（'+String(obj.ts||'').slice(0,19).replace('T',' ')+')<br>📊 数据项：'+Object.keys(obj.data||{}).length+' 项<br>🎵 曲库音频：'+(st.bgm||[]).length+' 首<br>🎙 录音：'+(st.media||[]).length+' 条<br>📖 小说：'+(st.novel||[]).length+' 本<br>🖼 媒体图片：'+(st.imgs||[]).length+' 张</div>';
           ph+='<div style="font-size:11px;color:var(--red);margin-bottom:6px;">⚠️ 导入将覆盖当前全部数据（含曲库/录音），请确认已备份！</div>';
           ph+='<button class="btn primary" id="impV2Btn" style="width:100%;">📥 导入全部（含媒体）</button>';
           $('#impPreview').innerHTML=ph;
@@ -4864,7 +4936,7 @@ function exportData(){
   toast('已开始导出');
 }
 /* ===== 数据守护：升级数据完好确认 + 大备份（含 IndexedDB 媒体） ===== */
-const WB_BUILD='2026-09-19.1';
+const WB_BUILD='2026-09-19.2';
 function wbKeyCount(){let n=0;for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith('wb_'))n++;}return n;}
 function dataGuard(){
   try{
@@ -4899,6 +4971,13 @@ function dataRescue(){
   h+='🗄 主库 wb_v5：'+fmt(mainSize)+' · 记录 '+mainInfo.days+' 天 · 照片 '+mainInfo.photos+' 张<br>';
   h+='💾 本地备份快照：'+bk.length+' 份'+(bk.length?'（最新 '+bk[bk.length-1].time.slice(0,19).replace('T',' ')+'）':'')+'<br>';
   h+='☁️ 本地模拟云缓存：'+cloudKeys.length+' 份</div>';
+  if(navigator.storage&&navigator.storage.estimate){
+    navigator.storage.estimate().then(es=>{
+      const el=document.getElementById('rsImgs');
+      if(el)el.textContent='🖼 外置媒体库：IndexedDB 已用 '+fmtSize(es.usage||0)+'（配额约 '+fmtSize(es.quota||0)+'）';
+    }).catch(()=>{});
+    h+='<div style="font-size:11px;color:var(--sub);"><span id="rsImgs">🖼 外置媒体库：查询中…</span></div>';
+  }
   if(!isMain)h+='<div style="font-size:11.5px;color:#d35400;background:rgba(230,126,34,.1);border-radius:10px;padding:8px 10px;line-height:1.7;margin:8px 0;">🔴 你现在不在主站。如果照片是在其他网址拍的，数据在那个网址里——请回到你当时拍照用的那个网址打开工作台，用「📦 大备份」导出文件，再到主站「导入」。</div>';
   if(mainSize<200&&bk.length){
     h+='<div style="font-size:11.5px;color:#d35400;font-weight:700;margin-bottom:6px;">⚠️ 主库几乎是空的，但本机还有 '+bk.length+' 份备份快照——你的数据大概率还在里面！</div>';
@@ -4938,11 +5017,12 @@ function novelDbAll(){return idbOpen().then(db=>new Promise((res,rej)=>{const rq
 async function exportDataFull(){
   toast('正在打包（含音频/小说/录音，可能需要一点时间）…');
   const snap=localSnapshot();
-  const bgm=[],novel=[],media=[];
+  const bgm=[],novel=[],media=[],imgs=[];
   try{const db=await bgmDB();const all=await bgmDBAll(db);for(const s of all){bgm.push({id:s.id,name:s.name,lrc:s.lrc||null,mime:(s.blob&&s.blob.type)||'audio/mpeg',b64:await blobToB64(s.blob)});}}catch(e){}
   try{const recs=await mdibAll();for(const r of recs){media.push({id:r.id,name:r.name,date:r.date,inst:r.inst,ts:r.ts,mime:(r.blob&&r.blob.type)||'',b64:await blobToB64(r.blob)});}}catch(e){}
   try{const txts=await novelDbAll();for(const t of txts){novel.push({id:t.id,text:t.text});}}catch(e){}
-  const pack={type:'workbench_full_v2',app:'workbench',ts:new Date().toISOString(),data:snap,idb:{bgm:bgm,novel:novel,media:media}};
+  try{const arr=await mextAll();arr.forEach(r=>imgs.push({id:r.id,data:r.data}));}catch(e){}
+  const pack={type:'workbench_full_v2',app:'workbench',ts:new Date().toISOString(),data:snap,idb:{bgm:bgm,novel:novel,media:media,imgs:imgs}};
   const blob=new Blob([JSON.stringify(pack)],{type:'application/json'});
   const sz=blob.size;
   if(sz>100*1048576&&!confirm('备份文件约 '+(sz/1048576).toFixed(0)+'MB（含音频），可能较大，继续导出？'))return;
@@ -4953,13 +5033,15 @@ async function exportDataFull(){
 async function importPackV2(obj){
   let nData=0;
   try{Object.keys(obj.data||{}).forEach(k=>{if(k.startsWith('wb_')){localStorage.setItem(k,obj.data[k]);nData++;}});}catch(e){}
-  const st=obj.idb||{};let nB=0,nM=0,nN=0;
+  const st=obj.idb||{};let nB=0,nM=0,nN=0,nI=0;
   try{const db=await bgmDB();for(const s of (st.bgm||[])){const blob=b64ToBlob(s.b64,s.mime);if(!blob)continue;await bgmDBPut(db,{id:s.id,name:s.name,lrc:s.lrc||null,blob:blob});nB++;}}catch(e){}
   try{for(const r of (st.media||[])){const blob=b64ToBlob(r.b64,r.mime);if(!blob)continue;await mdibPut({id:r.id,blob:blob,name:r.name,date:r.date,inst:r.inst,ts:r.ts});nM++;}}catch(e){}
   try{for(const t of (st.novel||[])){await idbSet(t.id,t.text);nN++;}}catch(e){}
+  try{for(const r of (st.imgs||[])){if(r.data){await mextPut(r.data,r.id);nI++;}}}catch(e){}
+  await mediaHydrate();
   store=load();SETTINGS=loadTheme();
-  backupNow('manual');appLog('import','大备份导入（数据'+nData+'项/曲库'+nB+'/录音'+nM+'/小说'+nN+'）');
-  closeSheet();toast('导入完成 ✅ 数据'+nData+'项 · 曲库'+nB+'首 · 录音'+nM+'条 · 小说'+nN+'本');
+  backupNow('manual');appLog('import','大备份导入（数据'+nData+'项/曲库'+nB+'/录音'+nM+'/小说'+nN+'/图片'+nI+'）');
+  closeSheet();toast('导入完成 ✅ 数据'+nData+'项 · 曲库'+nB+'首 · 录音'+nM+'条 · 小说'+nN+'本 · 图片'+nI+'张');
   render();
 }
 /* ===== 云端同步引擎（仿"过期啦"：账户 + 多端 + 上传/下载/合并 + 同步历史） ===== */
@@ -4977,7 +5059,6 @@ function cloudHttp(method,path,body){
   return fetch(base.replace(/\/$/,'')+path,{method:method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined}).then(r=>r.json());
 }
 function localSnapshot(){const s={};for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith('wb_'))s[k]=localStorage.getItem(k);}return s;}
-function applySnapshot(snap){if(!snap)return 0;let n=0;Object.keys(snap).forEach(k=>{if(k.startsWith('wb_')){localStorage.setItem(k,snap[k]);n++;}});store=load();SETTINGS=loadTheme();return n;}
 function snapshotSize(snap){const b=new Blob([JSON.stringify(snap)]);return b.size<1024?b.size+' B':b.size<1048576?(b.size/1024).toFixed(1)+' KB':(b.size/1048576).toFixed(2)+' MB';}
 async function cloudPush(snap){
   if(cloudUrl()){await cloudHttp('PUT','/v1/sync/'+encodeURIComponent(getSyncKey()),{snapshot:snap,ts:Date.now()});return;}
@@ -14720,7 +14801,8 @@ function navigate(leaf){
   var __oldRender=render;
   render=function(){if(!busy)ind.classList.remove('show');__oldRender.apply(null,arguments);};
 })();
-init();
+/* 先水合媒体（照片从 IndexedDB 恢复到内存）再启动界面，确保图库首次渲染就有图 */
+mediaHydrate().then(function(){try{init();}catch(e){try{render();}catch(e2){}}}).catch(function(){try{init();}catch(e){}});
 /* 专用直达链接：?diag=audio 或 #audiotest 自动弹出声音自检 */
 (function(){
   try{
