@@ -13515,12 +13515,47 @@ function removeMediaSrc(src){
   save();
 }
 function downloadDataURL(dataUrl,name){try{const a=document.createElement('a');a.href=dataUrl;a.download=name||('photo_'+Date.now()+'.jpg');document.body.appendChild(a);a.click();a.remove();}catch(e){toast('下载失败');}}
+function galFileName(it,idx){
+  const isVid=it.type==='video';
+  const ext=isVid?((it.src.match(/^data:video\/(\w+)/)&&RegExp.$1)||'mp4'):'jpg';
+  return (it.date||todayStr())+'_'+String(idx+1).padStart(2,'0')+'.'+ext;
+}
+async function galSaveAll(){
+  const items=[...GAL.selIdx].map(i=>GAL.filtered[i]).filter(Boolean);
+  if(!items.length){toast('先选择要保存的照片/视频');return;}
+  /* 电脑 Chrome/Edge：弹出文件夹选择器，用户自己选保存位置 */
+  if(window.showDirectoryPicker){
+    let dir=null;
+    try{dir=await window.showDirectoryPicker({mode:'readwrite'});}catch(e){
+      if(e&&e.name==='AbortError')return; /* 用户取消选择文件夹 */
+      dir=null;
+    }
+    if(dir){
+      toast('正在保存 '+items.length+' 个文件…');
+      let ok=0;
+      for(let i=0;i<items.length;i++){
+        try{
+          const blob=await (await fetch(items[i].src)).blob();
+          const fh=await dir.getFileHandle(galFileName(items[i],i),{create:true});
+          const w=await fh.createWritable();await w.write(blob);await w.close();
+          ok++;
+        }catch(e){}
+      }
+      closeSheet();toast('已保存 '+ok+'/'+items.length+' 个到所选文件夹 ✅');
+      return;
+    }
+  }
+  /* 回落：逐个下载到浏览器默认下载文件夹 */
+  toast('正在逐个下载 '+items.length+' 个文件（浏览器可能询问是否允许多个下载，点允许）');
+  items.forEach((it,i)=>setTimeout(()=>downloadDataURL(it.src,galFileName(it,i)),i*450));
+  closeSheet();
+}
 function pinchDist(t){return Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY);}
 function ensureGalleryDom(){
   if($('#pgal'))return;
   document.body.insertAdjacentHTML('beforeend',
    '<div id="pgal" class="pgal">'
-   +'<div class="pg-top"><button class="pg-bk" id="pgBk">‹</button><div class="pg-tt" id="pgTt">图库</div><div class="pg-ops"><button id="pgSel">选择</button><button id="pgCam">📷</button></div></div>'
+   +'<div class="pg-top"><button class="pg-bk" id="pgBk">‹</button><div class="pg-tt" id="pgTt">图库</div><div class="pg-ops"><button id="pgAll" style="display:none;">全选</button><button id="pgSel">选择</button><button id="pgCam">📷</button></div></div>'
    +'<div class="pg-gridwrap" id="pgWrap"><div id="pgScroll"></div></div>'
    +'<div class="pg-bottom"><div class="pg-tabs">'
    +'<span class="pg-tab active" data-gtab="all">全部</span><span class="pg-tab" data-gtab="image">照片</span><span class="pg-tab" data-gtab="video">视频</span>'
@@ -13553,6 +13588,8 @@ function renderGallery(){
   const scopeName=GAL.scope==='all'?'全部图库':(GAL.scope==='pet'?'毛球图库':(GAL.scope==='photo'?'拍照图库':'图库'));
   $('#pgTt').textContent=scopeName+' · '+items.length+'项';
   $('#pgSel').textContent=GAL.selMode?('已选'+GAL.selIdx.size+' · 完成'):'选择';
+  const pa=$('#pgAll');
+  if(pa){pa.style.display=GAL.selMode?'':'none';pa.textContent=(GAL.selIdx.size>=GAL.filtered.length&&GAL.filtered.length)?'取消全选':'全选';}
   const groups={};items.forEach((it,i)=>{const d=it.date||'未知';(groups[d]=groups[d]||[]).push({it,i});});
   let h='';
   Object.keys(groups).sort().reverse().forEach(d=>{
@@ -13584,10 +13621,16 @@ function renderGallery(){
 }
 function bindGalleryEvents(){
   $('#pgBk').onclick=closeGallery;
+  $('#pgAll').onclick=()=>{
+    const all=GAL.filtered.map((x,i)=>i);
+    if(GAL.selIdx.size>=GAL.filtered.length&&GAL.filtered.length)GAL.selIdx=new Set();
+    else GAL.selIdx=new Set(all);
+    renderGallery();
+  };
   $('#pgSel').onclick=()=>{
     if(GAL.selMode){
-      if(GAL.selIdx.size){openSheet('已选 '+GAL.selIdx.size+' 项','<button class="btn" id="galDl" style="width:100%;margin-bottom:8px;">⬇️ 逐张保存到本地</button><button class="btn" id="galDel" style="width:100%;color:var(--red);">🗑 从记录中删除</button>');
-        $('#galDl').onclick=()=>{let n=0;GAL.selIdx.forEach(i=>{const it=GAL.filtered[i];if(it&&it.type==='image'){downloadDataURL(it.src,'photo_'+(it.date||'')+'_'+(++n)+'.jpg');}});closeSheet();toast('已开始下载 '+n+' 张');};
+      if(GAL.selIdx.size){openSheet('已选 '+GAL.selIdx.size+' 项','<button class="btn primary" id="galDl" style="width:100%;margin-bottom:8px;">⬇️ 全部保存（可选文件夹）</button><button class="btn" id="galDel" style="width:100%;color:var(--red);">🗑 从记录中删除</button>');
+        $('#galDl').onclick=()=>galSaveAll();
         $('#galDel').onclick=()=>{GAL.selIdx.forEach(i=>{const it=GAL.filtered[i];if(it)removeMediaSrc(it.src);});GAL.selIdx=new Set();GAL.items=collectAllMedia(GAL.scope);closeSheet();renderGallery();toast('已删除');};
       }else{GAL.selMode=false;renderGallery();}
     }else{GAL.selMode=true;renderGallery();}
