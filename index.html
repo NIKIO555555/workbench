@@ -1474,6 +1474,27 @@ function openSettings(){
   html+='<div class="ef"><span>上传开屏背景图（可选）</span><input type="file" id="spImg" accept="image/*"></div>';
   /* ===== 语音 ===== */
   html+='<div class="gtitle">🔊 语音设置（朗读/分身播报通用）</div>';
+  /* 恋与深空·男主音色（Edge 神经网络在线音色） */
+  html+='<div class="ef"><span>💘 恋与深空·男主音色（中/英/日 神经网络男声）</span></div>';
+  html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">';
+  LADS_ORDER.forEach(function(id){
+    const ch=LADS_CHARS[id];
+    const sel=(SETTINGS.voiceLads===id)?'border:2px solid var(--brand);background:var(--brand-light);':'border:1px solid var(--line);';
+    html+='<div style="'+sel+'border-radius:12px;padding:10px;cursor:pointer;" data-lads="'+id+'">';
+    html+='<div style="font-size:20px;">'+ch.icon+'</div>';
+    html+='<div style="font-size:12px;font-weight:800;">'+esc(ch.name)+'</div>';
+    html+='<div style="font-size:10px;color:var(--sub);margin-top:2px;">'+esc(ch.desc)+'</div>';
+    html+='<div style="display:flex;gap:4px;margin-top:6px;">'+
+      '<span data-ladsaud="'+id+'|zh" style="font-size:10px;padding:3px 9px;border-radius:99px;background:var(--input);color:var(--brand);font-weight:700;">试中</span>'+
+      '<span data-ladsaud="'+id+'|en" style="font-size:10px;padding:3px 9px;border-radius:99px;background:var(--input);color:var(--brand);font-weight:700;">试英</span>'+
+      '<span data-ladsaud="'+id+'|ja" style="font-size:10px;padding:3px 9px;border-radius:99px;background:var(--input);color:var(--brand);font-weight:700;">试日</span>'+
+    '</div></div>';
+  });
+  html+='<div data-lads="off" style="border:'+(SETTINGS.voiceLads?'1px dashed var(--line);':'2px solid var(--brand);background:var(--brand-light);')+'border-radius:12px;padding:10px;cursor:pointer;text-align:center;">'+
+    '<div style="font-size:20px;">🔇</div><div style="font-size:12px;font-weight:800;">不启用</div>'+
+    '<div style="font-size:10px;color:var(--sub);margin-top:2px;">用系统音色</div></div>';
+  html+='</div>';
+  html+='<div class="card-sub" style="margin-bottom:10px;">四位男主各配中/英/日三语神经网络男声（联网自然合成，非官方配音；连接失败自动回落系统音色）。点卡片启用后，全站朗读/口语陪练都会用他的声音。</div>';
   /* 豆包风格：语音角色快速选择 */
   html+='<div class="ef"><span>🎙️ 语音角色（点击快速切换）</span></div>';
   html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">';
@@ -1498,12 +1519,41 @@ function openSettings(){
   html+='<div class="card-sub" style="margin-bottom:10px;">💡 声音太机械？Windows：设置 → 时间和语言 → 语音 → 添加语音可免费安装「微软晓晓/日语 Nanami/英语 Jenny」等自然音色；安卓：设置 → Google 文字转语音；iOS：设置 → 辅助功能 → 朗读内容 → 声音。安装后在音色实验室里选择即可。</div>';
   html+='<button class="btn primary" id="setSave" style="width:100%;">保存设置</button>';
   openSheet('⚙️ 设置',html);
+  /* 恋与深空男主音色：点卡片启用 / 不启用；点「试中/试英/试日」只试听不切换 */
+  $$('#sheetBody [data-lads]').forEach(el=>el.onclick=()=>{
+    const id=el.dataset.lads;
+    const hl=()=>{$$('#sheetBody [data-lads]').forEach(x=>{
+      const on=x.dataset.lads===SETTINGS.voiceLads||(SETTINGS.voiceLads===''&&x.dataset.lads==='off');
+      x.style.border=x.dataset.lads==='off'?(on?'2px solid var(--brand);':'1px dashed var(--line);'):(on?'2px solid var(--brand);':'1px solid var(--line);');
+      x.style.background=on?'var(--brand-light)':'';
+    });};
+    if(id==='off'){SETTINGS.voiceLads='';stopSpeak();saveSettings();hl();toast('已恢复系统音色');return;}
+    const ch=LADS_CHARS[id];if(!ch)return;
+    SETTINGS.voiceLads=id;SETTINGS.voiceChar='';
+    SETTINGS.voiceRate=ch.sRate;SETTINGS.voicePitch=ch.sPitch;
+    const rEl3=$('#sheetBody [data-k="voiceRate"]');if(rEl3){rEl3.value=ch.sRate;const rv=$('#rateVal');if(rv)rv.textContent=ch.sRate;}
+    const pEl3=$('#sheetBody [data-k="voicePitch"]');if(pEl3){pEl3.value=ch.sPitch;const pv=$('#pitchVal');if(pv)pv.textContent=ch.sPitch;}
+    $$('#sheetBody [data-voicechar]').forEach(x=>{x.style.border='1px solid var(--line)';x.style.background='';});
+    saveSettings();hl();
+    stopSpeak();
+    edgeSpeak((ch.sm||{})['zh-CN']||'','zh-CN').then(ok=>{if(!ok)toast('神经网络音色连接失败，朗读将自动回落系统音色');});
+  });
+  $$('#sheetBody [data-ladsaud]').forEach(el=>el.onclick=(ev)=>{
+    ev.stopPropagation();
+    const parts=el.dataset.ladsaud.split('|');
+    const ch=LADS_CHARS[parts[0]];if(!ch)return;
+    const lg=parts[1]==='zh'?'zh-CN':(parts[1]==='ja'?'ja-JP':'en-US');
+    stopSpeak();
+    edgeSpeak((ch.sm||{})[lg]||(lg==='ja-JP'?'やあ。':'Hello.'),lg).then(ok=>{if(!ok)toast('连接失败，请稍后再试');});
+  });
   /* 语音角色选择（豆包风格） */
   $$('#sheetBody [data-voicechar]').forEach(el=>el.onclick=()=>{
     $$('#sheetBody [data-voicechar]').forEach(x=>{x.style.border='1px solid var(--line)';x.style.background='';});
     el.style.border='2px solid var(--brand)';el.style.background='var(--brand-light)';
     const ch=TTS_CHARACTERS.find(c=>c.id===el.dataset.voicechar);if(!ch)return;
     SETTINGS.voiceChar=ch.id;SETTINGS.voiceGender=ch.gender;SETTINGS.voiceRate=ch.rate;SETTINGS.voicePitch=ch.pitch;
+    SETTINGS.voiceLads='';/* 普通角色与男主音色互斥 */
+    $$('#sheetBody [data-lads]').forEach(x=>{x.style.border=x.dataset.lads==='off'?'1px dashed var(--line);':'1px solid var(--line);';x.style.background='';});
     /* 同步更新手动设置控件 */
     const gEl=$('#sheetBody [data-k="voiceGender"]');if(gEl)gEl.value=ch.gender;
     const rEl2=$('#sheetBody [data-k="voiceRate"]');if(rEl2){rEl2.value=ch.rate;$('#rateVal').textContent=ch.rate;}
@@ -1602,6 +1652,100 @@ function pickVoice(lang){
   // 关键修复：无任何同语言音色时，绝不回退到错误语言（如日语回退到中文音）
   return null;
 }
+/* ===== 恋与深空·男主音色（Edge 神经网络在线音色，中/英/日三语） =====
+   官方角色配音为版权演员录音无法内置；此处用微软 Edge 神经网络自然男声
+   （云希=清亮少年 / 云扬=沉稳播音 / 云健=成熟磁性）+ 音调语速塑形，
+   为四位男主各配中/英/日一套音色。需联网，失败自动回落系统音色链路。 */
+const EDGE_TTS_TOKEN='6A5AA1D4EAFF4E9FB37E23D68491D6F4';
+let __edgeAudio=null;
+function edgeStop(){try{if(__edgeAudio){__edgeAudio.pause();__edgeAudio.src='';__edgeAudio=null;}}catch(e){}}
+function _hex32(){let s='';for(let i=0;i<16;i++)s+=Math.floor(Math.random()*256).toString(16).padStart(2,'0');return s;}
+async function _edgeGec(){
+  const WIN_EPOCH=11644473600;
+  let ticks=(Date.now()/1000+WIN_EPOCH)*1e7;
+  ticks-=ticks%3000000000;
+  const buf=new TextEncoder().encode(String(Math.round(ticks))+EDGE_TTS_TOKEN);
+  const h=await crypto.subtle.digest('SHA-256',buf);
+  let s='';new Uint8Array(h).forEach(function(b){s+=b.toString(16).padStart(2,'0');});
+  return s.toUpperCase();
+}
+function edgeTts(text,voice,lang,opts){
+  opts=opts||{};
+  return _edgeGec().then(function(gec){
+    return new Promise(function(resolve,reject){
+      if(!('WebSocket' in window)){reject(new Error('无 WebSocket'));return;}
+      let ws;
+      try{
+        ws=new WebSocket('wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken='+EDGE_TTS_TOKEN+'&Sec-MS-GEC='+gec+'&Sec-MS-GEC-Version=1-130.0.2849.68&ConnectionId='+_hex32());
+      }catch(e){reject(e);return;}
+      let settled=false;const chunks=[];
+      const done=(ok,val)=>{if(settled)return;settled=true;clearTimeout(to);try{ws.close();}catch(e2){}(ok?resolve:reject)(val);};
+      const to=setTimeout(function(){done(false,new Error('edge超时'));},9000);
+      ws.binaryType='arraybuffer';
+      ws.onopen=function(){
+        const ts=new Date().toUTCString();
+        try{
+          ws.send('X-Timestamp:'+ts+'\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}');
+          const esc=String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          const pp=(opts.pitchPct>=0?'+':'')+Math.round(opts.pitchPct||0)+'%';
+          const rr=(opts.ratePct>=0?'+':'')+Math.round(opts.ratePct||0)+'%';
+          const ssml="<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='"+lang+"'><voice name='"+voice+"'><prosody pitch='"+pp+"' rate='"+rr+"' volume='+0%'>"+esc+"</prosody></voice></speak>";
+          ws.send('X-RequestId:'+_hex32()+'\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:'+ts+'\r\nPath:ssml\r\n\r\n'+ssml);
+        }catch(e){done(false,e);}
+      };
+      ws.onmessage=function(ev){
+        if(typeof ev.data==='string'){
+          if(ev.data.indexOf('Path:turn.end')>=0){
+            if(chunks.length)done(true,new Blob(chunks,{type:'audio/mpeg'}));
+            else done(false,new Error('edge无音频'));
+          }
+        }else{
+          try{
+            const dv=new DataView(ev.data);
+            const hl=dv.getUint16(0);
+            chunks.push(ev.data.slice(2+hl));
+          }catch(e){}
+        }
+      };
+      ws.onerror=function(){done(false,new Error('edge连接失败'));};
+      ws.onclose=function(){if(!settled){if(chunks.length)done(true,new Blob(chunks,{type:'audio/mpeg'}));else done(false,new Error('edge连接关闭'));}};
+    });
+  });
+}
+function edgeSpeak(text,lang){
+  const p=ladsPersonaFor(lang);
+  if(!p||!text)return Promise.resolve(false);
+  return edgeTts(text,p.voice,p.lang,{pitchPct:p.pitchPct,ratePct:p.ratePct}).then(function(blob){
+    return new Promise(function(res){
+      edgeStop();
+      const a=new Audio(URL.createObjectURL(blob));
+      __edgeAudio=a;
+      a.onended=function(){try{URL.revokeObjectURL(a.src);}catch(e){}res(true);};
+      a.onerror=function(){res(false);};
+      a.play().catch(function(){res(false);});
+    });
+  }).catch(function(){return false;});
+}
+const LADS_CHARS={
+  xavier:{icon:'🌟',name:'沈星回',desc:'清冷少年音',zh:'zh-CN-YunxiNeural',en:'en-US-EricNeural',ja:'ja-JP-KeitaNeural',pitchPct:4,ratePct:2,sRate:1.05,sPitch:1.15,
+    sm:{'zh-CN':'你终于醒了，看来今晚的星图，要重新画过了。','en-US':"Hey, I've been waiting for you.",'ja-JP':'やあ、やっと会えたね。'}},
+  zayne:{icon:'❄️',name:'黎深',desc:'沉稳低音·克制温柔',zh:'zh-CN-YunyangNeural',en:'en-US-ChristopherNeural',ja:'ja-JP-KeitaNeural',pitchPct:-6,ratePct:-4,sRate:0.92,sPitch:0.85,
+    sm:{'zh-CN':'按时吃饭，别让我再看到你熬夜。','en-US':"Take care. I'll see you at your next appointment.",'ja-JP':'無理はしないことだ。'}},
+  rafayel:{icon:'🌊',name:'祁煜',desc:'灵动俏皮·海洋系',zh:'zh-CN-YunxiNeural',en:'en-US-RogerNeural',ja:'ja-JP-KeitaNeural',pitchPct:14,ratePct:6,sRate:1.15,sPitch:1.35,
+    sm:{'zh-CN':'喂，陪我去海边看日落吧，就现在。','en-US':"Beach at sunset? Say less, let's go!",'ja-JP':'ねえ、海を見に行こうよ。'}},
+  sylus:{icon:'🖤',name:'秦彻',desc:'极低沉磁性·危险感',zh:'zh-CN-YunjianNeural',en:'en-US-GuyNeural',ja:'ja-JP-KeitaNeural',pitchPct:-12,ratePct:-6,sRate:0.88,sPitch:0.72,
+    sm:{'zh-CN':'跟在我身后，别乱跑。','en-US':"Stay close. Don't fall behind.",'ja-JP':'俺の後ろにいろ。'}}
+};
+const LADS_ORDER=['xavier','zayne','rafayel','sylus'];
+function ladsPersonaFor(lang){
+  const ch=LADS_CHARS[SETTINGS.voiceLads];if(!ch)return null;
+  const l=String(lang||'zh-CN').toLowerCase();
+  let v,smLang;
+  if(l.indexOf('zh')===0){v=ch.zh;smLang='zh-CN';}
+  else if(l.indexOf('ja')===0){v=ch.ja;smLang='ja-JP';}
+  else{v=ch.en;smLang='en-US';}
+  return {voice:v,lang:smLang,pitchPct:ch.pitchPct,ratePct:ch.ratePct};
+}
 function speak(text,lang){
   lang=lang||'zh-CN';
   if(!text)return;
@@ -1610,6 +1754,20 @@ function speak(text,lang){
   if(window.__lastSpkText===text&&window.__lastSpkT&&_now-window.__lastSpkT<800)return;
   window.__lastSpkText=text;window.__lastSpkT=_now;
   // 世代锁：一次 speak() 调用全局唯一，异步回调/看门狗发现世代变更即失效
+  const gen=(window.__speakGen=((window.__speakGen||0)+1));
+  onlineSpeakStop();edgeStop();
+  /* 恋与深空男主音色：优先 Edge 神经网络在线合成（中/英/日），失败回落系统音色 */
+  if(SETTINGS.voiceLads&&LADS_CHARS[SETTINGS.voiceLads]){
+    edgeSpeak(text,lang).then(function(ok){
+      if(ok||window.__speakGen!==gen)return;
+      systemSpeakCore(text,lang);
+    });
+    return;
+  }
+  systemSpeakCore(text,lang);
+}
+function systemSpeakCore(text,lang){
+  lang=lang||'zh-CN';
   const gen=(window.__speakGen=((window.__speakGen||0)+1));
   const gate=(cb)=>{if(window.__speakGen===gen){try{cb();}catch(e){}}};
   onlineSpeakStop();
@@ -1664,14 +1822,14 @@ function speak(text,lang){
 function speakCN(text){speak(text,'zh-CN');}
 /* 长文本分段朗读（Android Chrome 单条 utterance 超长会静默失败，必须分段队列） */
 let __speakQueue=[],__speakStop=false,__speakOnEnd=null;
-function stopSpeak(){try{__speakStop=true;__speakQueue=[];window.speechSynthesis.cancel();}catch(e){}onlineSpeakStop();__speakOnEnd=null;}
+function stopSpeak(){try{__speakStop=true;__speakQueue=[];window.speechSynthesis.cancel();}catch(e){}onlineSpeakStop();edgeStop();__speakOnEnd=null;}
 function speakLong(text,lang){
   lang=lang||'zh-CN';
   if(!text)return;
   toast('🔊 开始朗读…');
   stopSpeak();__speakStop=false;
-  /* 语言校验：无该语言音色时拦截，避免用中文音色读外语 */
-  if(lang!=='zh-CN'){
+  /* 语言校验：无该语言音色时拦截，避免用中文音色读外语（男主音色模式下 Edge 可合成日/英，放行） */
+  if(lang!=='zh-CN'&&!(SETTINGS.voiceLads&&LADS_CHARS[SETTINGS.voiceLads])){
     const vs=VOICES.length?VOICES:window.speechSynthesis.getVoices();
     if(vs.length&&!pickVoice(lang)){toast('未安装「'+lang+'」语音包，无法朗读。请在 设置→音色实验室 选择，或安装系统 TTS 语音');return;}
   }
@@ -1712,6 +1870,23 @@ function speakLong(text,lang){
     };
     oNext();
   };
+  /* 恋与深空男主音色：全程 Edge 神经网络在线合成（支持中/英/日），同段失败重试一次，连续 2 次失败回落在线发音 */
+  if(SETTINGS.voiceLads&&LADS_CHARS[SETTINGS.voiceLads]){
+    let ei=0,eFail=0;
+    const eNext=()=>{
+      if(__speakStop)return;
+      if(ei>=__speakQueue.length){if(typeof __speakOnEnd==='function'){const cb=__speakOnEnd;__speakOnEnd=null;cb();}return;}
+      const seg=__speakQueue[ei++];
+      edgeSpeak(seg,lang).then(ok=>{
+        if(__speakStop)return;
+        if(ok){eFail=0;setTimeout(eNext,120);return;}
+        eFail++;
+        if(eFail>=2){runOnlineQueue(ei-1);return;}
+        ei--;setTimeout(eNext,250);
+      });
+    };
+    eNext();return;
+  }
   /* 无任何系统音色（国产 ROM 无 TTS 引擎）→ 全程走在线发音（中/英） */
   const hasSysVoice=(VOICES.length?VOICES:('speechSynthesis'in window?window.speechSynthesis.getVoices():[])).length>0;
   if(!hasSysVoice){runOnlineQueue(0);return;}
