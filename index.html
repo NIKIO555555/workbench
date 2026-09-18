@@ -975,7 +975,7 @@ function save(){
   try{
     /* 照片/视频等大字段自动外置到 IndexedDB，主库只存引用（否则 5MB 配额必爆，数据假性丢失） */
     const txt=JSON.stringify(store,function(k,v){
-      if(typeof v==='string'&&v.startsWith('data:')&&v.length>MEXT_MIN){
+      if(window.__mextOK!==false&&typeof v==='string'&&v.startsWith('data:')&&v.length>MEXT_MIN){
         let id=MEXT_IDS.get(v);
         if(!id){id='m'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);MEXT_IDS.set(v,id);mextPut(v,id);}
         return 'idb:'+id;
@@ -1008,11 +1008,16 @@ function mextOpen(){
 }
 function mextPut(data,id){
   id=id||('m'+Date.now().toString(36)+Math.random().toString(36).slice(2,7));
-  MEDIA_CACHE[id]=data;
-  return mextOpen().then(db=>new Promise(res=>{
-    if(!db)return res(id);
-    try{const tx=db.transaction('img','readwrite');tx.objectStore('img').put({id:id,data:data});tx.oncomplete=()=>res(id);tx.onerror=()=>res(id);}catch(e){res(id);}
-  })).catch(()=>id);
+  MEDIA_CACHE[id]=data; /* 内存立即生效，渲染不等磁盘 */
+  return mextOpen().then(db=>{
+    if(!db)return null; /* IndexedDB 不可用 */
+    return new Promise(res=>{
+      try{const tx=db.transaction('img','readwrite');tx.objectStore('img').put({id:id,data:data});
+        tx.oncomplete=()=>res(id);
+        tx.onerror=()=>{delete MEDIA_CACHE[id];MEXT_IDS.forEach((v2,k2)=>{if(v2===id)MEXT_IDS.delete(k2);});res(null);};
+      }catch(e){res(null);}
+    });
+  }).catch(()=>null);
 }
 function mextDel(id){delete MEDIA_CACHE[id];return mextOpen().then(db=>new Promise(res=>{if(!db)return res();try{const tx=db.transaction('img','readwrite');tx.objectStore('img').delete(id);tx.oncomplete=res;tx.onerror=res;}catch(e){res();}})).catch(()=>{});}
 function mextAll(){return mextOpen().then(db=>new Promise(res=>{if(!db)return res([]);try{const rq=db.transaction('img','readonly').objectStore('img').getAll();rq.onsuccess=()=>res(rq.result||[]);rq.onerror=()=>res([]);}catch(e){res([]);}})).catch(()=>[]);}
@@ -1020,6 +1025,8 @@ const _mextId=()=>'m'+Date.now().toString(36)+Math.random().toString(36).slice(2
 /* 启动水合：磁盘令牌 → 内存真实数据；旧版长 data: 字符串自动迁移外置 */
 async function mediaHydrate(){
   let missing=0,migrated=0;
+  try{const db=await mextOpen();window.__mextOK=!!db;}catch(e){window.__mextOK=false;}
+  if(!window.__mextOK){window.__mextOK=false;return;} /* 外置不可用：维持旧模式，数据留主库 */
   try{const all=await mextAll();all.forEach(r=>{MEDIA_CACHE[r.id]=r.data;});}catch(e){}
   const walk=o=>{
     Object.keys(o||{}).forEach(k=>{
