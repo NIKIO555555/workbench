@@ -1003,7 +1003,7 @@ function save(){
   }
   catch(e){
     /* 配额超限紧急自救：历史备份快照是最大占用，先清空再重试 */
-    try{store.backups=[];localStorage.setItem(KEY,JSON.stringify(store,function(k,v){return (typeof v==='string'&&v.startsWith('data:')&&v.length>MEXT_MIN)?'idb:'+(MEXT_IDS.get(v)||'lost'):v;}));toast('存储已满，已清理历史备份腾出空间，请尽快「📦 大备份」到文件');}
+    try{store.backups=[];localStorage.setItem(KEY,JSON.stringify(store,function(k,v){return (typeof v==='string'&&v.startsWith('data:')&&v.length>MEXT_MIN&&MEXT_IDS.has(v))?'idb:'+MEXT_IDS.get(v):v;}));toast('存储已满，已清理历史备份腾出空间，请尽快「📦 大备份」到文件');}
     catch(e2){toast('保存失败：本地存储已满，请立即「📦 大备份」后清理照片');}
   }
   try{autoSyncKick();}catch(e){}
@@ -1030,7 +1030,7 @@ function mextPut(data,id){
   return mextOpen().then(db=>{
     if(!db)return null; /* IndexedDB 不可用 */
     return new Promise(res=>{
-      try{const tx=db.transaction('img','readwrite');tx.objectStore('img').put({id:id,data:data});
+      try{const tx=db.transaction('img','readwrite');tx.objectStore('img').put({id:id,data:data,ts:Date.now()});
         tx.oncomplete=()=>res(id);
         tx.onerror=()=>{delete MEDIA_CACHE[id];MEXT_IDS.forEach((v2,k2)=>{if(v2===id)MEXT_IDS.delete(k2);});res(null);};
       }catch(e){res(null);}
@@ -1052,7 +1052,8 @@ async function mediaHydrate(){
       if(typeof v==='string'){
         if(v.startsWith('idb:')){
           const d=MEDIA_CACHE[v.slice(4)];
-          if(d)o[k]=d;else missing++;
+          if(d){o[k]=d;MEXT_IDS.set(d,v.slice(4));/* 关键修复：重建 数据->ID 映射，避免下次 save() 给同一张照片换新 ID 重写 IDB（换 ID + 写盘未完成 = 图库数据断链丢失） */}
+          else missing++;
         }else if(v.startsWith('data:')&&v.length>MEXT_MIN){
           let id=MEXT_IDS.get(v);
           if(!id){id=_mextId();MEXT_IDS.set(v,id);mextPut(v,id);}
@@ -1065,14 +1066,15 @@ async function mediaHydrate(){
   walk(store); /* 第二遍：把刚写入的 idb: 令牌水合回真实数据（缓存已就绪） */
   if(migrated){try{save();}catch(e){}}
   if(missing>0)setTimeout(()=>toast('⚠️ 有 '+missing+' 张图片的媒体文件缺失（浏览器数据曾被清理）'),3000);
-  /* 孤儿回收：磁盘引用里不存在的 IDB 记录清掉 */
+  /* 孤儿回收：磁盘引用里不存在的 IDB 记录清掉。
+     安全阀：新记录（无 ts 或 48h 内）一律保留——防止"重写令牌尚未写盘"时误删旧数据造成永久丢失 */
   try{
     const raw=localStorage.getItem(KEY)||'';
     const ref=new Set();
     (raw.match(/idb:m[0-9a-z]+/g)||[]).forEach(t=>ref.add(t.slice(4)));
     if(ref.size){
       const all=await mextAll();
-      all.forEach(r=>{if(!ref.has(r.id))mextDel(r.id);});
+      all.forEach(r=>{if(!ref.has(r.id)&&r.ts&&Date.now()-r.ts>48*3600000)mextDel(r.id);});
     }
   }catch(e){}
 }
@@ -4974,7 +4976,7 @@ function exportData(){
   toast('已开始导出');
 }
 /* ===== 数据守护：升级数据完好确认 + 大备份（含 IndexedDB 媒体） ===== */
-const WB_BUILD='2026-09-19.7';
+const WB_BUILD='2026-09-19.8';
 function wbKeyCount(){let n=0;for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith('wb_'))n++;}return n;}
 function dataGuard(){
   try{
@@ -5009,6 +5011,19 @@ function dataRescue(){
   h+='🗄 主库 wb_v5：'+fmt(mainSize)+' · 记录 '+mainInfo.days+' 天 · 照片 '+mainInfo.photos+' 张<br>';
   h+='💾 本地备份快照：'+bk.length+' 份'+(bk.length?'（最新 '+bk[bk.length-1].time.slice(0,19).replace('T',' ')+'）':'')+'<br>';
   h+='☁️ 本地模拟云缓存：'+cloudKeys.length+' 份</div>';
+  /* 媒体健康诊断：令牌数 vs IndexedDB 记录数 vs 断链数 */
+  (async()=>{
+    try{
+      const raw=localStorage.getItem(KEY)||'';
+      const toks=[...new Set(raw.match(/idb:m[0-9a-z]+/g)||[])];
+      const all=await mextAll();
+      const ids=new Set(all.map(r=>r.id));
+      const broken=toks.filter(t=>!ids.has(t.slice(4))).length;
+      let el=document.getElementById('mextDiag');
+      if(el)el.innerHTML='🖼 媒体仓库（IndexedDB）：记录 <b>'+all.length+'</b> 条 · 引用 <b>'+toks.length+'</b> 个 · 断链 <b style="color:'+(broken?'var(--red)':'var(--green)')+'">'+broken+'</b>'+(broken?'（断链媒体已无法本地恢复，建议开启云同步备份）':'（健康）');
+    }catch(e){}
+  })();
+  h+='<div id="mextDiag" style="font-size:12px;color:var(--sub);line-height:2;">🖼 媒体仓库：检测中…</div>';
   if(navigator.storage&&navigator.storage.estimate){
     navigator.storage.estimate().then(es=>{
       const el=document.getElementById('rsImgs');
