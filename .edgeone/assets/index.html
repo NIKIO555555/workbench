@@ -4936,7 +4936,7 @@ function exportData(){
   toast('已开始导出');
 }
 /* ===== 数据守护：升级数据完好确认 + 大备份（含 IndexedDB 媒体） ===== */
-const WB_BUILD='2026-09-19.3';
+const WB_BUILD='2026-09-19.2';
 function wbKeyCount(){let n=0;for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith('wb_'))n++;}return n;}
 function dataGuard(){
   try{
@@ -14592,8 +14592,6 @@ function init(){
     autoBackup();
     try{dataGuard();}catch(e){}
     try{hostGuard();}catch(e){}
-    /* PWA 离线：注册 Service Worker（首次联网访问后即可离线使用） */
-    try{if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(function(){});}catch(e){}
     try{initLive();}catch(e){console.warn('initLive',e);} // 实时行情引擎：盘中定时刷新
     // 热点：版本号升级时重置旧 SEED，避免展示过期示例；否则陈旧（>30 分钟）静默刷新
     try{
