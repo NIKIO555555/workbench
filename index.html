@@ -990,6 +990,7 @@ function save(){
     catch(e2){toast('保存失败：本地存储已满，请立即「📦 大备份」后清理照片');}
   }
   try{autoSyncKick();}catch(e){}
+  try{ghAutoKick();}catch(e){}
 }
 /* ===== 媒体外置存储层：图片/视频本体存 IndexedDB(wb_imgs)，内存持有真实数据 ===== */
 const MEXT_MIN=20000;
@@ -4620,6 +4621,7 @@ function renderMe(){
     '<div class="row"><span class="k">跟随系统深色模式</span><span class="v"><label class="switch"><input type="checkbox" id="followSystem" '+(SETTINGS.followSystem!==false?'checked':'')+'><span></span></label></span></div>'+
     '</div>';
   h+='<div class="card"><div class="card-title">☁️ 云端同步 <span class="pill" style="float:right;'+(cloudUrl()?'':'background:var(--brand-light);color:var(--brand);')+'">'+(cloudUrl()?'真实后端':'本地演示云')+'</span></div>'+
+    '<div class="row" style="cursor:pointer;background:var(--brand-light);border-radius:10px;margin-bottom:8px;" data-act="ghsync"><span class="k">🔄 真云同步（手机 ⇄ 电脑，照片自动同步）</span><span class="v">'+(ghCfg().token?'已配置 ›':'点此配置 ›')+'</span></div>'+
     '<div class="card-sub">账户即同步空间。网页版与未来的手机 / 鸿蒙端登录同一账户即可互相同步，支持上传、下载与合并。</div>'+
     '<div class="row" style="cursor:pointer;" data-act="cloudLogin"><span class="k">👤 账户</span><span class="v">'+(getAccount().phone?esc(getAccount().phone):'未绑定（设备 '+esc(getAccount().uid.slice(0,8))+'…）')+' ›</span></div>'+
     '<div class="row"><span class="k">已同步设备</span><span class="v">'+(getAccount().devices.length?esc(getAccount().devices.join('、')):'—')+'</span></div>'+
@@ -4943,7 +4945,7 @@ function exportData(){
   toast('已开始导出');
 }
 /* ===== 数据守护：升级数据完好确认 + 大备份（含 IndexedDB 媒体） ===== */
-const WB_BUILD='2026-09-19.3';
+const WB_BUILD='2026-09-19.4';
 function wbKeyCount(){let n=0;for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith('wb_'))n++;}return n;}
 function dataGuard(){
   try{
@@ -5077,6 +5079,184 @@ async function cloudPull(){
   const raw=localStorage.getItem('wbcache_cloud_'+getSyncKey());return raw?JSON.parse(raw):null;
 }
 function getSyncLog(){return getGlobal('synclog')||[];}
+/* ===== 真云同步：GitHub 私有仓库 workbench-sync（手机 ⇄ 电脑） ===== */
+function ghCfg(){try{return JSON.parse(localStorage.getItem('wb_ghsync')||'{}');}catch(e){return {};}}
+function ghSetCfg(c){localStorage.setItem('wb_ghsync',JSON.stringify(c));}
+async function ghSha256(str){
+  const buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+async function ghApi(path,method,body,token){
+  const headers={'Accept':'application/vnd.github+json','User-Agent':'workbench-sync'};
+  if(token)headers['Authorization']='token '+token;
+  if(body)headers['Content-Type']='application/json';
+  const r=await fetch('https://api.github.com'+path,{method:method,headers:headers,body:body?JSON.stringify(body):undefined});
+  let j=null;try{j=await r.json();}catch(e){}
+  return {st:r.status,j:j};
+}
+/* 从内存水合后的 store 构建上传包：照片抽离为 gsync:<内容hash> 引用（同图双端同路径，天然去重） */
+const GH_MAX_MEDIA=900000;
+async function ghCollect(){
+  const obj=JSON.parse(JSON.stringify(store)); /* 深拷贝：内存版含真实 dataURL */
+  const entries=[];
+  const walk1=o=>{Object.keys(o||{}).forEach(k=>{
+    const v=o[k];
+    if(typeof v==='string'&&v.startsWith('data:')&&v.length>20000){
+      if(!entries.some(x=>x.data===v))entries.push({data:v});
+    }else if(v&&typeof v==='object')walk1(v);
+  });};
+  walk1(obj);
+  for(const e of entries){e.id='g'+(await ghSha256(e.data));}
+  const walk2=o=>{Object.keys(o||{}).forEach(k=>{
+    const v=o[k];
+    if(typeof v==='string'&&v.startsWith('data:')&&v.length>20000){
+      const e=entries.find(x=>x.data===v);
+      if(e)o[k]='gsync:'+e.id;
+    }else if(v&&typeof v==='object')walk2(v);
+  });};
+  walk2(obj);
+  const snap={};
+  for(let i=0;i<localStorage.length;i++){
+    const k=localStorage.key(i);
+    if(!k||k==='wb_ghsync'||k==='wb_backups')continue; /* 本机备份/同步配置不上云 */
+    snap[k]=(k===KEY)?JSON.stringify(obj):localStorage.getItem(k);
+  }
+  return {snap:snap,imgs:entries.filter(e=>e.data.length<=GH_MAX_MEDIA),skipped:entries.filter(e=>e.data.length>GH_MAX_MEDIA).length};
+}
+async function ghPutFile(path,contentB64,token,sha){
+  const body={message:'sync',content:contentB64};
+  if(sha)body.sha=sha;
+  const r=await ghApi('/repos/NIKIO555555/workbench-sync/contents/'+path,'PUT',body,token);
+  return r.st===201||r.st===200;
+}
+let _ghSyncBusy=false,_ghAutoTimer=null,_ghLastAuto=0;
+function ghAutoKick(){
+  const c=ghCfg();
+  if(!c.auto||!c.token||!c.code)return;
+  clearTimeout(_ghAutoTimer);
+  _ghAutoTimer=setTimeout(function(){ghUpload(true);},8000);
+}
+async function ghSaveCfgFromInputs(){
+  const token=$('#ghToken')?$('#ghToken').value.trim():ghCfg().token||'';
+  const code=$('#ghCode')?$('#ghCode').value.trim():ghCfg().code||'';
+  const auto=$('#ghAuto')?$('#ghAuto').checked:(ghCfg().auto||false);
+  const nc=ghCfg();nc.token=token;nc.code=code;nc.auto=auto;
+  nc.codeHash=code?await ghSha256('wbzy::'+code):'';
+  if(!nc.codeHash)delete nc.codeHash;
+  ghSetCfg(nc);return nc;
+}
+async function ghUpload(silent){
+  const c=ghCfg();
+  if(!c.token||!c.codeHash){if(!silent)toast('请先填写令牌和同步码并保存');return;}
+  if(_ghSyncBusy){if(!silent)toast('同步进行中，请稍候');return;}
+  if(silent&&Date.now()-(_ghLastAuto||0)<60000)return; /* 自动上传限流：至少 60 秒一次 */
+  _ghSyncBusy=true;_ghLastAuto=Date.now();
+  try{
+    if(!silent)toast('正在打包上传…');
+    const pack=await ghCollect();
+    const c2=ghCfg();
+    const up=c2.upMap||{};
+    let n=0;
+    for(const e of pack.imgs){
+      if(up[e.id])continue;
+      const b64=e.data.split(',')[1]||'';
+      const ok=await ghPutFile('sync/'+c2.codeHash+'/img/'+e.id,b64,c2.token);
+      if(ok){up[e.id]=1;n++;}
+    }
+    const dataB64=btoa(unescape(encodeURIComponent(JSON.stringify({ts:Date.now(),device:(SETTINGS&&SETTINGS.deviceName)||'本机',data:pack.snap}))));
+    const cur=await ghApi('/repos/NIKIO555555/workbench-sync/contents/sync/'+c2.codeHash+'/data.json','GET',null,c2.token);
+    const put=await ghPutFile('sync/'+c2.codeHash+'/data.json',dataB64,c2.token,cur.st===200?cur.j.sha:null);
+    if(!put){if(!silent)toast('上传失败：令牌无效或网络问题');return;}
+    c2.upMap=up;c2.lastUp=Date.now();ghSetCfg(c2);
+    if(!silent)toast('已上传云端 ✅'+(n?(' 新照片'+n+'张'):'')+(pack.skipped?('（大文件'+pack.skipped+'个未同步）'):''));
+    if($('#sheet').classList.contains('open')&&$('#sheetTitle')&&$('#sheetTitle').textContent.indexOf('真云同步')>-1)ghSyncPanel();
+  }catch(e){
+    if(!silent)toast('上传出错：'+e.message);
+  }finally{_ghSyncBusy=false;}
+}
+async function ghDownload(){
+  const c=ghCfg();
+  if(!c.token||!c.codeHash){toast('请先填写令牌和同步码并保存');return;}
+  if(_ghSyncBusy){toast('同步进行中，请稍候');return;}
+  _ghSyncBusy=true;
+  try{
+    toast('正在从云端拉取…');
+    const st=await ghApi('/repos/NIKIO555555/workbench-sync/contents/sync/'+c.codeHash+'/data.json','GET',null,c.token);
+    if(st.st===404){toast('云端还是空的，先在另一台设备「上传到云端」');return;}
+    if(st.st!==200){toast('下载失败（'+st.st+'）：检查令牌是否正确');return;}
+    const pack=JSON.parse(decodeURIComponent(escape(atob(st.j.content.replace(/\s/g,'')))));
+    if(!confirm('将把云端数据（'+new Date(pack.ts).toLocaleString()+' · 来自'+(pack.device||'其他设备')+'）覆盖到本机，继续？'))return;
+    /* 收集图片引用并逐张下载到本机媒体库 */
+    const refs=new Set();
+    const walk=o=>{Object.keys(o||{}).forEach(k=>{
+      const v=o[k];
+      if(typeof v==='string'&&v.indexOf('gsync:')===0)refs.add(v.slice(6));
+      else if(v&&typeof v==='object')walk(v);
+    });};
+    const mainObj=JSON.parse(pack.data[KEY]||'{}');
+    walk(mainObj);
+    let got=0;
+    for(const id of refs){
+      const r=await ghApi('/repos/NIKIO555555/workbench-sync/contents/sync/'+c.codeHash+'/img/'+id,'GET',null,c.token);
+      if(r.st===200&&r.j&&r.j.content){
+        await mextPut('data:image/jpeg;base64,'+r.j.content.replace(/\s/g,''),id);
+        got++;
+      }
+    }
+    /* 引用换回真实数据（MEDIA_CACHE 已就绪） */
+    const walk2=o=>{Object.keys(o||{}).forEach(k=>{
+      const v=o[k];
+      if(typeof v==='string'&&v.indexOf('gsync:')===0&&MEDIA_CACHE[v.slice(6)])o[k]=MEDIA_CACHE[v.slice(6)];
+      else if(v&&typeof v==='object')walk2(v);
+    });};
+    walk2(mainObj);
+    /* 覆盖本机：主库整体替换，其他 wb_ 键有则覆盖 */
+    store=mainObj;
+    save();
+    Object.keys(pack.data).forEach(function(k){if(k!==KEY)localStorage.setItem(k,pack.data[k]);});
+    SETTINGS=loadTheme();
+    await mediaHydrate();
+    c.lastDown=Date.now();ghSetCfg(c);
+    closeSheet();
+    toast('已从云端恢复 ✅ 图片'+got+'张'+(refs.size-got>0?('（'+(refs.size-got)+'张缺失，可能云端也没有）'):''));
+    render();
+  }catch(e){toast('下载出错：'+e.message);}
+  finally{_ghSyncBusy=false;}
+}
+async function ghSyncPanel(){
+  const c=ghCfg();
+  let html='<div class="gtitle">🔄 真云同步（手机 ⇄ 电脑）</div>';
+  html+='<div style="font-size:11.5px;color:var(--sub);line-height:1.8;margin-bottom:8px;">数据与照片存到你自己的 GitHub 私有仓库 <b>workbench-sync</b>（只有你能看，永久有效）。两台设备填<b>同一个同步码</b>即可互相同步。照片自动同步；超大文件（视频）请用「📦 大备份」。</div>';
+  html+='<div style="font-size:11.5px;color:var(--sub);margin-bottom:4px;">🔑 同步令牌（GitHub Token，需有 workbench-sync 仓库读写权限）</div>';
+  html+='<input id="ghToken" type="password" value="'+escA(c.token||'')+'" style="width:100%;font-size:12px;" placeholder="粘贴 GitHub 令牌">';
+  html+='<div style="font-size:10.5px;color:var(--sub);margin:4px 0 8px;line-height:1.7;">推荐创建专用令牌（2 分钟）：GitHub 网页右上头像 → Settings → 左下 Developer settings → Personal access tokens → Fine-grained tokens → Generate new token → Repository access 选 <b>Only select repositories → workbench-sync</b> → Permissions 中 <b>Contents = Read and write</b> → 生成复制。用你现有的大权限令牌也能用，但安全性低一些。</div>';
+  html+='<div style="font-size:11.5px;color:var(--sub);margin-bottom:4px;">🔒 同步码（两台设备填一样的任意字符串）</div>';
+  html+='<input id="ghCode" type="text" value="'+escA(c.code||'')+'" style="width:100%;font-size:12px;" placeholder="自定义同步码，如 wb2026">';
+  html+='<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:10px 0;font-size:12.5px;"><input type="checkbox" id="ghAuto" '+(c.auto?'checked':'')+' style="flex:none;">数据变更后自动上传（静默，约 8 秒后同步，最快 60 秒一次）</label>';
+  html+='<div style="font-size:11px;color:var(--sub);line-height:1.8;margin-bottom:8px;">上次上传：'+(c.lastUp?new Date(c.lastUp).toLocaleString():'从未')+'<br>上次下载：'+(c.lastDown?new Date(c.lastDown).toLocaleString():'从未')+'</div>';
+  html+='<div class="btn-row"><button class="btn primary" id="ghSave" style="flex:1;">💾 保存设置</button><button class="btn" id="ghUp" style="flex:1;">⬆️ 上传到云端</button><button class="btn" id="ghDown" style="flex:1;">⬇️ 从云端恢复</button></div>';
+  html+='<div style="font-size:10.5px;color:var(--sub);margin-top:8px;line-height:1.7;">⚠️ 上传覆盖云端、下载覆盖本机。新设备第一次先「下载」，老设备先「上传」。令牌只存在本机浏览器，不进代码不进仓库。</div>';
+  openSheet('真云同步',html);
+  $('#ghSave').onclick=async function(){
+    const nc=ghCfg();nc.token=$('#ghToken').value.trim();nc.code=$('#ghCode').value.trim();nc.auto=$('#ghAuto').checked;
+    nc.codeHash=nc.code?(await ghSha256('wbzy::'+nc.code)):'';
+    if(!nc.codeHash)delete nc.codeHash;
+    ghSetCfg(nc);toast('已保存 ✅');ghSyncPanel();
+  };
+  $('#ghUp').onclick=async function(){
+    const nc=ghCfg();nc.token=$('#ghToken').value.trim();nc.code=$('#ghCode').value.trim();
+    nc.codeHash=nc.code?await ghSha256('wbzy::'+nc.code):'';
+    if(!nc.codeHash){toast('请先填同步码');return;}
+    ghSetCfg(nc);ghUpload(false);
+  };
+  $('#ghDown').onclick=async function(){
+    const nc=ghCfg();nc.token=$('#ghToken').value.trim();nc.code=$('#ghCode').value.trim();
+    nc.codeHash=nc.code?await ghSha256('wbzy::'+nc.code):'';
+    if(!nc.codeHash){toast('请先填同步码');return;}
+    ghSetCfg(nc);ghDownload();
+  };
+}
+
 function addSyncLog(rec){const l=getSyncLog();l.push(rec);if(l.length>60)l.shift();setGlobal('synclog',l);}
 function lastSyncTime(){const l=getSyncLog();return l.length?l[l.length-1].time:'从未';}
 async function doSync(dir){
@@ -10157,6 +10337,7 @@ function bindCommon(){
   c.querySelectorAll('[data-act="exportByModule"]').forEach(el=>el.onclick=exportByModule);
   c.querySelectorAll('[data-act="importData"]').forEach(el=>el.onclick=importData);
   c.querySelectorAll('[data-bkdetail]').forEach(el=>el.onclick=()=>viewBackupDetail(el.dataset.bkdetail));
+  c.querySelectorAll('[data-act="ghsync"]').forEach(el=>el.onclick=ghSyncPanel);
   c.querySelectorAll('[data-act="syncUp"]').forEach(el=>el.onclick=()=>doSync('up'));
   c.querySelectorAll('[data-act="syncDown"]').forEach(el=>el.onclick=()=>doSync('down'));
   c.querySelectorAll('[data-act="syncMerge"]').forEach(el=>el.onclick=()=>doSync('merge'));
