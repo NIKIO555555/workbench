@@ -971,7 +971,15 @@ function buildThemeMenu(){$('#themeMenu').innerHTML=Object.entries(THEMES).map((
 const KEY='wb_v5';
 let store=load();
 function load(){try{return JSON.parse(localStorage.getItem(KEY))||{};}catch(e){return{};}}
-function save(){try{localStorage.setItem(KEY,JSON.stringify(store));}catch(e){toast('保存失败：本地存储可能已满');}try{autoSyncKick();}catch(e){}}
+function save(){
+  try{localStorage.setItem(KEY,JSON.stringify(store));}
+  catch(e){
+    /* 配额超限紧急自救：历史备份快照是最大占用，先清空再重试 */
+    try{store.backups=[];localStorage.setItem(KEY,JSON.stringify(store));toast('存储已满，已清理历史备份腾出空间，请尽快「📦 大备份」到文件');}
+    catch(e2){toast('保存失败：本地存储已满，请立即「📦 大备份」后清理照片');}
+  }
+  try{autoSyncKick();}catch(e){}
+}
 function getRec(mod,date){return(store[mod]&&store[mod][date])||null;}
 function setRec(mod,date,val){store[mod]=store[mod]||{};store[mod][date]=val;save();}
 function datesOf(mod){return Object.keys(store[mod]||{}).sort().reverse();}
@@ -4582,6 +4590,7 @@ function renderMe(){
     '<div class="row"><span class="k">最后备份</span><span class="v">'+(backups.length?backups[backups.length-1].time:'未备份')+'</span></div>'+
     '<div class="row"><span class="k">当前网址</span><span class="v" style="font-size:11px;">'+esc(location.host||'本地')+(location.host==='nikio555555.github.io'?' ✅ 主站':' ⚠️ 备用')+'</span></div>'+
     (location.host!=='nikio555555.github.io'?'<div style="font-size:11px;color:#d35400;background:rgba(230,126,34,.1);border-radius:10px;padding:8px 10px;line-height:1.7;margin-top:4px;">⚠️ 你正从备用网址打开工作台——每个网址的数据是独立保存、互不互通的。日常请使用主网址 <b>nikio555555.github.io/workbench</b>，换网址前先「大备份」再在新网址「导入」。</div>':'')+
+    '<div class="btn-row" style="margin-top:6px;"><button class="btn ghost sm" data-act="dataRescue" style="flex:1;">🚨 数据救援/诊断（数据不见了点这里）</button></div>'+
     '</div>';
   // 本地历史记录（浏览足迹）——默认折叠，点标题展开/收起
   const visits=getVisits();
@@ -4675,9 +4684,25 @@ function backupNow(type){
   const blob=new Blob([JSON.stringify(snap)],{type:'application/json'});
   const size=blob.size<1024?blob.size+' B':blob.size<1048576?(blob.size/1024).toFixed(1)+' KB':(blob.size/1048576).toFixed(2)+' MB';
   const mods=backupModules(snap);
-  const backups=getBackups();
-  backups.push({type:type,time:new Date().toISOString(),device:'本机',size:size,snapshot:snap,modules:mods,count:Object.keys(snap).length});
-  if(backups.length>50)backups.shift();
+  let backups=getBackups();
+  /* 自动备份去重：内容没变就不重复存（照片会让快照巨大，重复存撑爆配额） */
+  if(type==='auto'){
+    const sig=JSON.stringify(snap).length+'|'+Object.keys(snap).length;
+    const lastAuto=backups.filter(b=>b.type==='auto').pop();
+    if(lastAuto&&lastAuto.sig===sig){return;}
+    var snapSig=sig;
+  }
+  const rec={type:type,time:new Date().toISOString(),device:'本机',size:size,snapshot:snap,modules:mods,count:Object.keys(snap).length};
+  if(snapSig)rec.sig=snapSig;
+  backups.push(rec);
+  /* 瘦身：最多留 6 份，总快照体积控制在 2MB 内（大文件备份请用「📦 大备份」导出文件） */
+  const snapSize=b=>{try{return JSON.stringify(b.snapshot||{}).length;}catch(e){return 0;}};
+  let total=backups.reduce((a,b)=>a+snapSize(b),0);
+  while(backups.length>1&&(backups.length>6||total>2*1048576)){
+    const oldest=backups.findIndex((b,i)=>i<backups.length-1);
+    if(oldest<0)break;
+    total-=snapSize(backups[oldest]);backups.splice(oldest,1);
+  }
   setGlobal('backups',backups);
   if(type!=='auto')appLog('backup',type==='cloud'?'云端上传':'本地备份 ('+mods.join('/')+')');
   toast(type==='auto'?'已自动备份 ☁️':'备份成功 ☁️');
@@ -4843,6 +4868,8 @@ const WB_BUILD='2026-09-19.1';
 function wbKeyCount(){let n=0;for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith('wb_'))n++;}return n;}
 function dataGuard(){
   try{
+    /* 申请持久存储：防止浏览器在存储压力下清空站点数据 */
+    if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{});
     const last=localStorage.getItem('wb_build');
     if(!last){localStorage.setItem('wb_build',WB_BUILD);return;}
     if(last!==WB_BUILD){
@@ -4851,6 +4878,51 @@ function dataGuard(){
       setTimeout(()=>toast('工作台已升级 ✅ 你的数据都在（'+wbKeyCount()+' 项）'),2200);
     }
   }catch(e){}
+}
+/* ===== 数据救援：扫描本机还能找到的一切数据，一键恢复 ===== */
+function dataRescue(){
+  const rows=[];let total=0;
+  for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);const v=localStorage.getItem(k)||'';total+=v.length;rows.push({k:k,len:v.length});}
+  const mainRow=rows.find(r=>r.k===KEY);
+  const mainSize=mainRow?mainRow.len:0;
+  let mainInfo={days:0,photos:0};
+  try{const s=JSON.parse(localStorage.getItem(KEY)||'{}');
+    Object.keys(s.photo||{}).forEach(d=>{(s.photo[d].items||[]).forEach(it=>{if(it.type!=='video')mainInfo.photos++;});});
+    Object.keys(s).forEach(m=>{if(typeof s[m]==='object'&&s[m])Object.keys(s[m]).forEach(d=>{if(/^\d{4}-\d{2}-\d{2}$/.test(d))mainInfo.days++;});});
+  }catch(e){}
+  const bk=getBackups();
+  const cloudKeys=rows.filter(r=>r.k.startsWith('wbcache_cloud_')).map(r=>r.k);
+  const isMain=location.host==='nikio555555.github.io';
+  const fmt=n=>n<1024?n+'B':n<1048576?(n/1024).toFixed(1)+'KB':(n/1048576).toFixed(2)+'MB';
+  let h='<div style="font-size:12px;color:var(--sub);line-height:2;">';
+  h+='📍 当前网址：<b style="color:'+(isMain?'var(--green)':'var(--red)')+'">'+esc(location.host||'本地')+'</b>'+(isMain?'（主站）':'（<b>不是主站！各网址数据独立不互通</b>）')+'<br>';
+  h+='🗄 主库 wb_v5：'+fmt(mainSize)+' · 记录 '+mainInfo.days+' 天 · 照片 '+mainInfo.photos+' 张<br>';
+  h+='💾 本地备份快照：'+bk.length+' 份'+(bk.length?'（最新 '+bk[bk.length-1].time.slice(0,19).replace('T',' ')+'）':'')+'<br>';
+  h+='☁️ 本地模拟云缓存：'+cloudKeys.length+' 份</div>';
+  if(!isMain)h+='<div style="font-size:11.5px;color:#d35400;background:rgba(230,126,34,.1);border-radius:10px;padding:8px 10px;line-height:1.7;margin:8px 0;">🔴 你现在不在主站。如果照片是在其他网址拍的，数据在那个网址里——请回到你当时拍照用的那个网址打开工作台，用「📦 大备份」导出文件，再到主站「导入」。</div>';
+  if(mainSize<200&&bk.length){
+    h+='<div style="font-size:11.5px;color:#d35400;font-weight:700;margin-bottom:6px;">⚠️ 主库几乎是空的，但本机还有 '+bk.length+' 份备份快照——你的数据大概率还在里面！</div>';
+    h+='<button class="btn primary" id="rsLast" style="width:100%;margin-bottom:8px;">♻️ 恢复最新备份（'+bk[bk.length-1].time.slice(11,19)+'）</button>';
+  }
+  if(cloudKeys.length&&mainSize<200){
+    h+='<button class="btn" id="rsCloud" style="width:100%;margin-bottom:8px;">♻️ 从本地模拟云恢复</button>';
+  }
+  if(bk.length>1){
+    h+='<div style="font-size:11px;font-weight:700;color:var(--sub);margin:6px 0 4px;">或手动选择一份快照恢复：</div>';
+    h+=bk.slice().reverse().slice(0,6).map((b,i)=>'<button class="btn sm" data-rsbk="'+escA(b.time)+'" style="width:100%;margin-bottom:4px;text-align:left;">'+(b.type==='auto'?'🔄':'💾')+' '+b.time.slice(0,19).replace('T',' ')+' · '+esc(b.size||'')+'</button>').join('');
+  }
+  if(navigator.storage&&navigator.storage.persisted){
+    navigator.storage.persisted().then(p=>{
+      const el=document.getElementById('rsPersist');
+      if(el)el.textContent=p?'✅ 已授予（浏览器不会自动清除）':'❌ 未授予（存储压力大时浏览器可能清数据）';
+    }).catch(()=>{});
+    h+='<div style="font-size:11px;color:var(--sub);margin-top:6px;">持久存储状态：<span id="rsPersist">查询中…</span></div>';
+  }
+  h+='<div style="font-size:11px;color:var(--sub);margin-top:8px;line-height:1.7;">💡 建议：恢复成功后立刻「📦 大备份」导出文件保存到手机/网盘，这是最保险的一份。</div>';
+  openSheet('🚨 数据救援',h);
+  const rl=$('#rsLast');if(rl)rl.onclick=()=>{const b=bk[bk.length-1];applySnapshot(b.snapshot);closeSheet();toast('已恢复 '+Object.keys(b.snapshot||{}).length+' 项，请重启页面');render();};
+  const rc=$('#rsCloud');if(rc)rc.onclick=()=>{try{const raw=localStorage.getItem(cloudKeys[cloudKeys.length-1]);const j=JSON.parse(raw);if(j&&j.snapshot){applySnapshot(j.snapshot);closeSheet();toast('已从模拟云恢复，请重启页面');render();}}catch(e){toast('恢复失败');}};
+  $$('#sheetBody [data-rsbk]').forEach(el=>el.onclick=()=>{const b=bk.find(x=>x.time===el.dataset.rsbk);if(!b)return;applySnapshot(b.snapshot);closeSheet();toast('已恢复该快照，请重启页面');render();});
 }
 function hostGuard(){
   try{
@@ -9993,6 +10065,7 @@ function bindCommon(){
   c.querySelectorAll('[data-act="backupNow"]').forEach(el=>el.onclick=()=>backupNow('manual'));
   c.querySelectorAll('[data-act="exportData"]').forEach(el=>el.onclick=exportData);
   c.querySelectorAll('[data-act="exportFull"]').forEach(el=>el.onclick=exportDataFull);
+  c.querySelectorAll('[data-act="dataRescue"]').forEach(el=>el.onclick=dataRescue);
   c.querySelectorAll('[data-act="exportByModule"]').forEach(el=>el.onclick=exportByModule);
   c.querySelectorAll('[data-act="importData"]').forEach(el=>el.onclick=importData);
   c.querySelectorAll('[data-bkdetail]').forEach(el=>el.onclick=()=>viewBackupDetail(el.dataset.bkdetail));
