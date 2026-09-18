@@ -5139,7 +5139,7 @@ const INSTRUMENT_SHEETS={
  ]
 };
 /* 乐谱：不再用随机占位图。公共领域曲目内置真实简谱（离线可看），
-   所有曲目提供 MuseScore / 8notes 在线搜谱 + B站教学。 */
+   搜谱走 B站教学 / 全网搜索 / 百度图片（已验证可达）。 */
 function sheetCover(s){
   const g={'入门':'linear-gradient(135deg,#2bbf6a,#1d9d5c)','初级':'linear-gradient(135deg,#3a9bdc,#2f7fc0)','中级':'linear-gradient(135deg,#e0a32e,#c9851d)','高级':'linear-gradient(135deg,#e0673a,#c04a24)','大师':'linear-gradient(135deg,#b14bd8,#8e2fb5)','考级':'linear-gradient(135deg,#7a6cf0,#5c4ed8)'}[s.diff]||'linear-gradient(135deg,#888,#666)';
   const first=esc((s.t||'?').replace(/（.*）|\(.*\)/g,'').trim().charAt(0)||'🎼');
@@ -5171,12 +5171,6 @@ function jpRender(jp){
     row+='<div class="jp-bar">'+toks.map(jpNote).join('')+'</div>';
   });
   return '<div class="jp-box"><div class="jp-row">'+row+'</div></div>';
-}
-function sheetOnline(s){
-  const q=s.t+' '+INSTRUMENT_META[cur.leaf].label+' 乐谱';
-  return '<div style="display:flex;gap:8px;margin-bottom:8px;">'+
-    '<button class="btn" id="sheetMus" style="flex:1;">🎼 MuseScore 在线谱</button>'+
-    '<button class="btn" id="sheet8n" style="flex:1;">📄 8notes 免费谱</button></div>';
 }
 function renderStudyInstrument(){
   const key=cur.leaf;const meta=INSTRUMENT_META[key];
