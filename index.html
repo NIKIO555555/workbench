@@ -1150,6 +1150,7 @@ const NAV=[
    ]},
  ]},
  {id:'life',title:'生活',icon:'🌿',children:[
+   {id:'life_sched',title:'日程排表',icon:'📅',leaf:true},
    {id:'life_photo',title:'每日拍照',icon:'📷',leaf:true},
    {id:'life_water',title:'喝水打卡',icon:'💧',leaf:true},
    {id:'life_poop',title:'便便打卡',icon:'🚽',leaf:true},
@@ -1171,6 +1172,7 @@ const BOTTOM=[
  {id:'home',title:'首页',icon:'🏠',topTitle:'我的工作台',topIcon:'🏠',leaf:'home'},
  {id:'diet',title:'饮食',icon:'🍱',topTitle:'饮食中心',topIcon:'🍱',leaf:'diet'},
  {id:'life',title:'生活',icon:'🌿',topTitle:'生活中心',topIcon:'🌿',leaf:'life_hub'},
+ {id:'sched',title:'日程',icon:'📅',topTitle:'日程排表',topIcon:'📅',leaf:'life_sched'},
  {id:'wardrobe',title:'衣橱',icon:'👗',topTitle:'我的衣橱',topIcon:'👗',leaf:'life_wardrobe'},
  {id:'sport',title:'运动',icon:'🏃',topTitle:'运动中心',topIcon:'🏃',leaf:'life_sport'},
  {id:'doctor',title:'健康',icon:'🩺',topTitle:'健康中心',topIcon:'🩺',leaf:'doctor'},
@@ -1257,7 +1259,7 @@ const BACK_TARGET={
   study_running:'study_hub',study_fitness:'study_hub',study_swim:'study_hub',study_yoga:'study_hub',study_craft:'study_hub',study_lang:'study_hub',
   lang_en_kaoyan:'study_lang',lang_en_ielts:'study_lang',lang_ja_n5:'study_lang',lang_ja_n4:'study_lang',lang_ja_n3:'study_lang',lang_ja_n2:'study_lang',lang_ja_n1:'study_lang',
   novel_rank:'novel_hub',novel_shelf:'novel_hub',novel_listen:'novel_hub',ent_download:'novel_hub',
-  life_photo:'life_hub',life_water:'life_hub',life_poop:'life_hub',life_habit:'life_hub',life_health:'life_hub',life_sleep:'life_hub',
+  life_photo:'life_hub',life_sched:'life_hub',life_water:'life_hub',life_poop:'life_hub',life_habit:'life_hub',life_health:'life_hub',life_sleep:'life_hub',
   diet:'life_hub',life_wardrobe:'life_hub',life_pet:'life_hub',life_mood:'life_hub',life_sport:'life_hub',life_storage:'life_hub'
 };
 function backBar(){
@@ -2581,7 +2583,7 @@ function render(){
     fin_stock:renderFinance, fin_fund:renderFinance, fin_review:renderFinance, fin_news:renderFinance, fin_hold:renderFinance,
     account:renderAccount, ent_trend:renderTrend, novel_rank:renderNovelRank, novel_shelf:renderNovelShelf, novel_listen:renderNovelListen, ent_download:renderDownload,
     study_hub:renderStudyHub, me:renderMe, life_hub:renderLifeHub, novel_hub:renderNovelHub,
-    diet:renderDiet, life_wardrobe:renderWardrobe, life_pet:renderPet, life_photo:renderPhoto, life_mood:renderMood, life_water:renderWater, life_poop:renderPoop, life_habit:renderHabit, diary:renderDiary,
+    diet:renderDiet, life_wardrobe:renderWardrobe, life_pet:renderPet, life_photo:renderPhoto, life_mood:renderMood, life_water:renderWater, life_poop:renderPoop, life_habit:renderHabit, life_sched:renderSched, diary:renderDiary,
     life_sport:renderSport, life_storage:renderStorage, life_health:renderHealth, life_sleep:renderSleep,
     doctor:renderDoctor,
   };
@@ -3116,6 +3118,7 @@ function renderHome(){
     {id:'ent_download',ico:'⬇️',t:'小说下载',m:'下载书架'},
     {id:'diary',ico:'✍️',t:'每日心得',m:'成长复盘'},
     {id:'life_habit',ico:'✅',t:'自定义打卡',m:'习惯养成'},
+    {id:'life_sched',ico:'📅',t:'日程排表',m:'排表打卡'},
     {id:'life_sport',ico:'🏋️',t:'运动健身',m:'Keep式课程'},
     {id:'life_storage',ico:'📦',t:'收纳整理',m:'空间/位置/物品'},
   ];
@@ -10448,6 +10451,134 @@ function renderHabit(){
   h+='</div>';return h;
 }
 
+/* ===== 日程排表（每日事项排表 + 打卡 + 每日模板） ===== */
+function schedItems(){let r=getRec('sched',cur.date);if(!r){r={items:[]};setRec('sched',cur.date,r);}return r.items||[];}
+function schedSave(items){const r=getRec('sched',cur.date)||{};r.items=items;setRec('sched',cur.date,r);}
+function schedStreak(){
+  let streak=0,check=todayStr();
+  const ds=datesOf('sched');
+  if(!ds.includes(check))check=addDays(check,-1);
+  while(ds.includes(check)){
+    const it=(getRec('sched',check)||{}).items||[];
+    if(!it.length)break;
+    if(it.filter(x=>x.done).length<it.length)break;
+    streak++;check=addDays(check,-1);
+  }
+  return streak;
+}
+function renderSched(){
+  const items=schedItems().slice().sort((a,b)=>(a.t||'99:99').localeCompare(b.t||'99:99'));
+  const done=items.filter(x=>x.done).length;
+  const pct=items.length?Math.round(done/items.length*100):0;
+  const streak=schedStreak();
+  const tpl=getGlobal('schedTpl')||{items:[]};
+  let h=dateBar('sched');
+  h+=quoteBar('default');
+  /* 完成度卡 */
+  h+='<div class="card" style="background:linear-gradient(135deg,var(--brand-light),var(--card));"><div style="display:flex;text-align:center;">'
+    +'<div style="flex:1;"><div style="font-size:20px;font-weight:900;color:var(--brand);">'+items.length+'</div><div style="font-size:11px;color:var(--sub);">今日事项</div></div>'
+    +'<div style="flex:1;border-left:1px solid var(--line);border-right:1px solid var(--line);"><div style="font-size:20px;font-weight:900;color:var(--brand);">'+done+'</div><div style="font-size:11px;color:var(--sub);">已完成</div></div>'
+    +'<div style="flex:1;"><div style="font-size:20px;font-weight:900;color:var(--brand);">'+streak+'</div><div style="font-size:11px;color:var(--sub);">全勤连击</div></div></div>'
+    +'<div style="margin-top:10px;"><div style="height:8px;border-radius:99px;background:var(--input);overflow:hidden;"><div style="height:100%;width:'+pct+'%;background:var(--brand);border-radius:99px;transition:width .3s;"></div></div>'
+    +'<div style="font-size:11px;color:var(--sub);margin-top:4px;">今日完成度 '+pct+'%'+(items.length&&done===items.length?' 🎉 全部完成！':'')+'</div></div></div>';
+  /* 今日排表 */
+  h+='<div class="card"><div class="card-title">📅 今日排表 <span class="r">点事项打卡 · 长按删除</span></div>';
+  h+=topActions('sched',true,'管理模板');
+  h+='<div id="schedList" style="margin-top:8px;">';
+  if(!items.length)h+='<div class="fv empty">今天还没有安排，点下方「＋ 添加事项」</div>';
+  items.forEach((it)=>{
+    const i=schedItems().findIndex(x=>x===it);
+    h+='<div data-sit="'+i+'" style="display:flex;align-items:center;gap:10px;padding:10px 6px;border-bottom:1px dashed var(--line);cursor:pointer;'+(it.done?'opacity:.55;':'')+'">'
+      +'<span style="font-size:12px;font-weight:800;color:var(--brand);width:48px;flex:none;">'+esc(it.t||'--:--')+'</span>'
+      +'<span style="width:26px;height:26px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:13px;border:2px solid '+(it.done?'var(--brand)':'var(--line)')+';background:'+(it.done?'var(--brand)':'transparent')+';color:#fff;">'+(it.done?'✓':'')+'</span>'
+      +'<div style="flex:1;min-width:0;"><div style="font-size:13.5px;font-weight:700;'+(it.done?'text-decoration:line-through;':'')+'">'+esc(it.name)+'</div>'
+      +(it.note?'<div style="font-size:11px;color:var(--sub);margin-top:2px;">'+esc(it.note)+'</div>':'')+'</div>'
+      +'<span data-stpl="'+i+'" style="font-size:10px;color:var(--sub);flex:none;padding:3px 8px;border:1px solid var(--line);border-radius:99px;">存模板</span>'
+      +'</div>';
+  });
+  h+='</div>';
+  h+='<div style="display:flex;gap:8px;margin-top:10px;">'
+    +'<button class="btn primary" id="schedAdd" style="flex:1;">＋ 添加事项</button>'
+    +(tpl.items&&tpl.items.length?'<button class="btn" id="schedTplApply" style="flex:1;">📋 套用模板（'+tpl.items.length+'项）</button>':'')
+    +'</div>';
+  if(tpl.items&&tpl.items.length){
+    h+='<div style="font-size:11px;color:var(--sub);margin-top:8px;">每日模板：'+tpl.items.map(t=>esc((t.t||'--')+' '+t.name)).join(' · ')+'　<span id="schedTplClear" style="color:var(--red);cursor:pointer;">清空模板</span></div>';
+  }
+  h+='</div>';
+  /* 近 7 天完成情况 */
+  h+='<div class="card"><div class="card-title">📈 近 7 天完成情况</div><div style="display:flex;gap:6px;margin-top:8px;">';
+  for(let i=6;i>=0;i--){
+    const d=addDays(cur.date,-i);
+    const it=(getRec('sched',d)||{}).items||[];
+    const dn=it.filter(x=>x.done).length;
+    const full=it.length&&dn===it.length;
+    h+='<div style="flex:1;text-align:center;"><div style="height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;background:'+(full?'var(--brand)':(it.length?'var(--brand-light)':'var(--input)'))+';color:'+(full?'#fff':'var(--sub)')+';">'+(it.length?dn+'/'+it.length:'-')+'</div><div style="font-size:9.5px;color:var(--sub);margin-top:3px;">'+d.slice(5)+'</div></div>';
+  }
+  h+='</div><div class="card-sub" style="margin-top:8px;">事项按时间排序；点圆圈=打卡完成/取消；长按事项删除；固定日程存入模板，每天一键套用。</div></div>';
+  return h;
+}
+function schedAddDialog(){
+  openSheet('＋ 添加日程事项',
+    '<label class="ef"><span>时间（可留空）</span><input id="scT" type="time"></label>'
+    +'<label class="ef"><span>事项 *</span><input id="scN" placeholder="如：晨读 30 分钟 / 复盘今日开销"></label>'
+    +'<label class="ef"><span>备注（可选）</span><input id="scNo" placeholder="地点 / 细节…"></label>'
+    +'<div class="save-row"><button class="btn primary" id="scOk">添加</button></div>');
+  $('#scOk').onclick=()=>{
+    const name=($('#scN').value||'').trim();if(!name){toast('请填写事项内容');return;}
+    const items=schedItems();
+    items.push({t:$('#scT').value||'',name:name,note:($('#scNo').value||'').trim(),done:false});
+    schedSave(items);closeSheet();render();toast('已添加 📅');
+  };
+}
+function bindSched(){
+  const c=$('#content');
+  c.querySelectorAll('[data-act="edit"]').forEach(el=>el.onclick=editSched);
+  const sa=$('#schedAdd');if(sa)sa.onclick=schedAddDialog;
+  c.querySelectorAll('[data-sit]').forEach(el=>{
+    const i=Number(el.dataset.sit);
+    let lp=null;
+    el.addEventListener('pointerdown',()=>{lp=setTimeout(()=>{lp=null;const items=schedItems();if(items[i]&&confirm('删除「'+items[i].name+'」？')){items.splice(i,1);schedSave(items);render();}},650);});
+    ['pointerup','pointerleave','pointercancel'].forEach(ev=>el.addEventListener(ev,()=>{if(lp){clearTimeout(lp);lp=null;}}));
+    el.onclick=()=>{
+      const items=schedItems();if(!items[i])return;
+      items[i].done=!items[i].done;
+      schedSave(items);
+      const all=items.length&&items.every(x=>x.done);
+      render();
+      if(all)toast('🎉 今日日程全部完成！');
+      else if(items[i].done)toast('✅ 已完成：'+items[i].name);
+    };
+  });
+  c.querySelectorAll('[data-stpl]').forEach(el=>el.onclick=(e)=>{
+    e.stopPropagation();
+    const it=schedItems()[Number(el.dataset.stpl)];if(!it)return;
+    const tpl=getGlobal('schedTpl')||{items:[]};
+    if(!tpl.items.some(x=>x.t===it.t&&x.name===it.name))tpl.items.push({t:it.t,name:it.name,note:it.note||''});
+    setGlobal('schedTpl',tpl);render();toast('已存入每日模板 📋');
+  });
+  const ap=$('#schedTplApply');if(ap)ap.onclick=()=>{
+    const tpl=getGlobal('schedTpl');if(!tpl||!tpl.items||!tpl.items.length)return;
+    const items=schedItems();
+    let added=0;
+    tpl.items.forEach(t=>{if(!items.some(x=>x.t===t.t&&x.name===t.name)){items.push({t:t.t,name:t.name,note:t.note||'',done:false});added++;}});
+    schedSave(items);render();
+    toast(added?('已套用模板，新增 '+added+' 项 📋'):'模板事项今天都已在排表中');
+  };
+  const tc=$('#schedTplClear');if(tc)tc.onclick=(e)=>{e.stopPropagation();setGlobal('schedTpl',{items:[]});render();toast('模板已清空');};
+}
+function editSched(){
+  const tpl=getGlobal('schedTpl')||{items:[]};
+  let html='<div class="gtitle">每日模板（每天固定要做的事）</div>';
+  html+='<div class="card-sub" style="margin-bottom:8px;">模板 = 每天重复的固定日程。先在排表里点事项右侧「存模板」积累，之后每天点「套用模板」一键铺进当天，再按需增删。</div>';
+  html+=tpl.items.map((t,i)=>'<div class="list-item"><div class="li-head"><span class="t">'+esc((t.t||'--:--')+' '+t.name)+'</span><button class="btn sm" data-tpldel="'+i+'" style="color:var(--red);">删除</button></div></div>').join('')||'<div class="fv empty">模板还是空的</div>';
+  html+='<div class="gtitle" style="margin-top:10px;">今日事项管理</div>';
+  html+=schedItems().map((it,i)=>'<div class="list-item"><div class="li-head"><span class="t">'+esc((it.t||'--:--')+' '+it.name)+(it.done?' ✅':'')+'</span><button class="btn sm" data-sdel="'+i+'" style="color:var(--red);">删除</button></div></div>').join('')||'<div class="fv empty">今天还没有事项</div>';
+  html+='<div class="save-row"><button class="btn primary" id="schedOk">完成</button></div>';
+  openSheet('📅 排表管理',html);
+  $('#schedOk').onclick=closeSheet;
+  $$('#sheetBody [data-tpldel]').forEach(el=>el.onclick=()=>{const t=getGlobal('schedTpl')||{items:[]};t.items.splice(Number(el.dataset.tpldel),1);setGlobal('schedTpl',t);closeSheet();editSched();render();});
+  $$('#sheetBody [data-sdel]').forEach(el=>el.onclick=()=>{const items=schedItems();items.splice(Number(el.dataset.sdel),1);schedSave(items);closeSheet();editSched();render();});
+}
 /* ===== 运动健身（Keep 风格） ===== */
 const SPORT_COURSES=[
   {name:'HIIT 燃脂全身',level:'K1 零基础',mins:12,kcal:100,part:'全身',q:'HIIT 全身燃脂 合集'},
@@ -10840,6 +10971,7 @@ function bindCommon(){
   if(cur.leaf==='life_water')bindWater();
   if(cur.leaf==='life_poop')bindPoop();
   if(cur.leaf==='life_habit')bindHabit();
+  if(cur.leaf==='life_sched')bindSched();
   if(cur.leaf==='life_sport')bindSport();
   if(cur.leaf==='life_storage')bindStorage();
   if(cur.leaf==='life_health')bindHealth();
@@ -10858,7 +10990,7 @@ function storeKey(leaf){
   if(leaf.startsWith('lang'))return 'lang';
   if(leaf.startsWith('fin'))return 'finance';
   if(leaf.startsWith('study'))return 'study';
-  const m={life_wardrobe:'wardrobe',life_pet:'pet',life_photo:'photo',life_mood:'mood',life_water:'water',life_poop:'poop',life_habit:'habit',ent_trend:'trend',ent_download:'download',novel_rank:'novel',novel_shelf:'novel',diet:'diet',account:'account',diary:'diary'};
+  const m={life_wardrobe:'wardrobe',life_pet:'pet',life_photo:'photo',life_mood:'mood',life_water:'water',life_poop:'poop',life_habit:'habit',life_sched:'sched',ent_trend:'trend',ent_download:'download',novel_rank:'novel',novel_shelf:'novel',diet:'diet',account:'account',diary:'diary'};
   return m[leaf]||leaf.split('_')[0];
 }
 const GLOBAL_MODS=new Set(['trend','download','novel','wardrobe']);
@@ -10940,6 +11072,7 @@ function editCurrent(){
   if(id==='life_water')return editWater();
   if(id==='life_poop')return editPoop();
   if(id==='life_habit')return editHabit();
+  if(id==='life_sched')return editSched();
   if(id==='diary')return editDiary();
   if(id.startsWith('study_'))return editStudy();
 }
@@ -15729,6 +15862,7 @@ function init(){
 /* ===== 生活中心（整合所有生活子模块，去重底栏） ===== */
 function renderLifeHub(){
   const items=[
+    {id:'life_sched',ico:'📅',t:'日程排表',m:'排表打卡'},
     {id:'life_photo',ico:'📷',t:'每日拍照',m:'影像收集'},
     {id:'life_water',ico:'💧',t:'喝水打卡',m:'每日补水'},
     {id:'life_poop',ico:'🚽',t:'便便打卡',m:'健康记录'},
